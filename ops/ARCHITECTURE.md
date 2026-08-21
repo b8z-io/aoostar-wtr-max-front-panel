@@ -93,15 +93,33 @@ per line to drop unwanted keys.
 **Attention:** `set_sensor_mapping` may only be called once at startup, and the original
 labels are not preserved. Dynamic remapping is not supported.
 
-### 2.5 No udev rule needed on the host
+### 2.5 Device identification — confirmed, and no udev rule needed
 
-`asterctl` enumerates serial ports and matches on VID/PID itself, defaulting to exactly
-`0416:90A1` (`crates/asterctl-lcd/src/aoo_screen.rs`, `USB_UART_VID` / `USB_UART_PID`,
-`find_usb_serial_port`). Device-node churn is a non-problem when running on the host.
+Confirmed by Hermes via the Proxmox API:
 
-🔶 **Hermes:** the report says `/dev/ttyUSB0`. Synwit VCP is CDC-ACM, and upstream docs say
-`/dev/ttyACM0`. Please confirm what actually appears on `pve-nas`. It shouldn't matter given
-VID/PID auto-detection, but it's worth knowing.
+| Field | Value |
+|---|---|
+| Product | USB Virtual COM (Synwit SWM32-series MCU) |
+| Vendor ID | `0416` |
+| Product ID | `90a1` |
+| Bus / path | bus 3, path 1.1 — **behind an internal USB 2.0 hub** at bus 3 path 1 |
+| Link speed | **12 Mbps (full-speed USB)** |
+
+The VID/PID matches `asterctl`'s built-in default exactly
+(`crates/asterctl-lcd/src/aoo_screen.rs`, `USB_UART_VID` = `0x416`, `USB_UART_PID` =
+`0x90A1`, `find_usb_serial_port`). It enumerates ports and matches on VID/PID itself, so
+device-node churn is a non-problem on the host and **no udev rule is required**.
+
+The `ttyUSB*` vs `ttyACM*` question is therefore moot for our purposes — `asterctl` finds
+the port either way. (Expect `ttyACM0`: an MCU presenting a virtual COM port is almost
+certainly CDC-ACM class.) Confirm at deploy time with `ls /dev/tty*`; it needs host shell
+access, which the Proxmox MCP can't provide.
+
+**The link speed is the important find** — it sets a hard ceiling on refresh rate. See §5.
+
+**If we ever revisit Option C:** because the panel sits behind an internal hub, pass it
+through by vendor/product ID (`0416:90a1`), never by bus path — path assignments don't
+reliably survive reboots. Hermes's point, and correct.
 
 ---
 
@@ -167,26 +185,70 @@ Option A's genuine cost — two deployment targets instead of one — is accepte
 
 ## 5. Update economics — constraints on panel design
 
-From `docs/lcd_protocol.md` and `crates/asterctl-lcd/src/aoo_screen.rs`, verified against a
-simulated render:
+From `docs/lcd_protocol.md`, `crates/asterctl-lcd/src/aoo_screen.rs`, and Hermes's link-speed
+finding:
 
 - Frame buffer is **960 × 376 RGB565**, row-major, sent in **47-byte chunks** (15,360 total).
+- Each chunk carries a 12-byte header, so **59 bytes on the wire per 47 bytes of pixels** —
+  20% of all bandwidth is protocol overhead, and there is nothing to be done about it.
 - A frame cache means only **changed chunks** are transmitted.
-- A full-screen redraw is **~1.3 s**. Cost scales with chunks touched.
 - 47 bytes = **23.5 pixels of width**, so horizontal quantisation is ~24px.
 
-Design rules that follow:
+### The ceiling is USB, not the baud rate
+
+Upstream's doc notes that the configured 1.5 Mbaud is ignored because USB bulk transfer is
+faster. True, but it leaves the impression that throughput is effectively unbounded. It
+isn't. **The device negotiates full-speed USB at 12 Mbps**, which caps bulk transfer at
+~1.19 MB/s theoretical and ~700 KB/s in practice.
+
+That reconciles exactly with the measured full-frame redraw:
+
+```
+full frame wire cost = 15,360 chunks × 59 bytes  ≈ 906 KB
+906 KB ÷ ~700 KB/s                               ≈ 1.3 s     ← matches measurement
+```
+
+So the ~1.3 s figure isn't a quirk of the firmware; it's the link speed. **No amount of
+optimisation gets past it.** Nor will re-plugging or bypassing the internal hub — the
+*device* is full-speed, not the hub.
+
+### Budget model
+
+Effective throughput ≈ **11,800 chunks/second**. Each refresh interval buys that many chunks:
+
+| Refresh | Chunk budget | Share of screen |
+|---|---|---|
+| 1.0 s | ~11,800 | ~77% |
+| 0.5 s | ~5,900 | ~39% |
+| 0.25 s | ~2,950 | ~19% |
+
+For reference, a 300 × 100 px tile ≈ 1,280 chunks ≈ 0.11 s.
+
+That's more generous than it first looks — at a 1-second refresh you can repaint over
+three-quarters of the display. The constraint bites on *continuous motion*, not on updating
+numbers.
+
+### Design rules that follow
 
 | Effect | Verdict |
 |---|---|
-| Colour-coded temps, progress bars, gauges, status dots | Cheap — small areas |
-| Time-based backgrounds (day/night) | Full redraw, but twice a day. Fine |
-| Scrolling ticker | **Avoid.** A 40px full-width band is ~11% of the frame ≈ 0.14 s/step, capping the band at ~7 fps and eating the update budget. **Page the text instead of scrolling it** |
+| Colour-coded temps, progress bars, gauges, status dots | Cheap — small areas, negligible budget |
+| Numbers changing every second | Fine. This is the normal case and it's nowhere near the ceiling |
+| Time-based backgrounds (day/night) | Full redraw, twice a day. Fine |
+| Scrolling ticker | **Avoid.** A 40px full-width band ≈ 1,630 chunks ≈ 0.14 s/step, capping the band at ~7 fps while consuming the whole budget. **Page the text instead of scrolling it** — same information, near-zero cost |
 | Many small scattered elements | Cost more than one consolidated block of equal area |
 | Anything narrower than ~24px | Pays a full chunk per row regardless |
 
 Panel refresh and rotation are config: `setup.refresh` (seconds, float) and
 `setup.switchTime` in the monitor JSON.
+
+**Panel switching is the expensive operation** — a new background means a near-full frame,
+~1.3 s. Rotating every few seconds would spend most of the link redrawing backgrounds.
+Favour longer dwell times, and prefer panels that share a background where possible.
+
+**Cold-cache cost:** the frame cache lives in the `asterctl` process. Every restart forces a
+full 1.3 s redraw. A flapping systemd unit means continuous full-frame traffic — set a
+sensible `RestartSec` rather than restarting instantly.
 
 ---
 
@@ -293,7 +355,14 @@ review comments in the docs themselves. Async, but version-controlled.
 
 ## 10. Open questions for Hermes 🔶
 
-1. **Device node** on `pve-nas` — `ttyACM0` or `ttyUSB0`? (§2.5)
+**Resolved by Hermes 2026-08-21:** device identity, bus topology and link speed (§2.5).
+The device-node question is closed — VID/PID auto-detection makes it irrelevant; confirm
+`ls /dev/tty*` at deploy for the record only.
+
+1. **What else is on bus 3, behind that USB 2.0 hub?** Full-speed devices sharing a hub's
+   transaction translator share bandwidth. Given §5 shows we're already near the link
+   ceiling, a chatty neighbour on the same TT could starve panel updates. `lsusb -t` at
+   deploy time will show the tree.
 2. **Is docker2 hosted on `pve-nas`** or a different Proxmox node? Affects the blast-radius
    argument in §4 — if it's the same box, the failure domains are less separate than assumed.
 3. **GPU metrics.** The 780M is passed through to docker2. Can host sysfs still see

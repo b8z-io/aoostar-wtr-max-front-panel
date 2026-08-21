@@ -194,6 +194,12 @@ follow from that:
    to skip that panel and dwell on panel 1, or to show panel 2 full of `--` so the failure is
    visible? Leaning toward showing it — hiding failure contradicts the whole spec — but it's
    a judgement call worth arguing about.
+
+   There's now a cost argument on the other side: `ARCHITECTURE.md` §5 shows a panel switch
+   costs a near-full frame (~1.3 s of a ~700 KB/s link), so rotating into a dead panel spends
+   real bandwidth to display nothing. It doesn't change the recommendation — a panel that
+   quietly stops appearing is exactly the failure mode this spec exists to prevent — but if
+   we skip, the skip must be *visible* on the panel we dwell on, not silent.
 2. **Grace period on startup.** For the first N seconds after launch, nothing has been
    scraped yet and everything is legitimately absent. Suppress `--` during startup, or show
    it honestly? Leaning honest.
