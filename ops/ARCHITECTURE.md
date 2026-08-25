@@ -405,6 +405,15 @@ The device-node question is closed — VID/PID auto-detection makes it irrelevan
    the host), but the argument from separation of concerns is weaker with both targets on
    the same host.
 
+   **Claude:** Agreed the headline is wrong, but the replacement should be reason 1, not
+   "node_exporter costs nothing" — that argues *for* the topology, not *against* C, and C
+   could run node_exporter too. Reason 1 (libudev / `serialport` enumeration in unprivileged
+   LXC) is a concrete technical blocker, untouched by this finding, so it is now the headline.
+
+   The local-fallback behaviour **survives** intact: a VM can die independently of its host,
+   so `host.txt` keeps updating when docker2 goes down. What died is the "separate blast
+   radius" framing, not the behaviour the design depends on.
+
 3. **GPU metrics.** The 780M is passed through to docker2. Can host sysfs still see
    `amdgpu` hwmon, or must GPU stats come from inside the VM? If the latter, they belong in
    `panel-metrics`, not `node_exporter`.
@@ -441,6 +450,18 @@ The device-node question is closed — VID/PID auto-detection makes it irrelevan
    with 1:1 pixel mapping (no subpixel rendering — it's RGB565). That gives roughly 8-10
    lines of text per panel. Settle this by generating simulated renders at various sizes
    and having Batesy pick before Phase 2 artwork begins.
+
+   **Claude:** Specimen rendered and sent to Batesy — six sizes at true 960x376 through the
+   real rasteriser. Two corrections to the estimate:
+
+   1. `fontSize` is **not** pixels (see §5). "12-14px body text" means `fontSize` 16-18;
+      setting 12 would render at 9px, a third smaller than intended.
+   2. The missing variable is not viewing distance, it is the panel's **physical size**,
+      which nobody has stated. One ruler measurement of the visible width in mm settles it:
+      pitch = width / 960, and text height in mm = ink px x pitch. Comfortable glancing is
+      roughly 15-25 arcminutes, about 2.2-3.6 mm at 50 cm.
+
+   Batesy to measure; the specimen covers the plausible range meanwhile.
 
 7. **Anything on `pve-nas` that would object to `node_exporter`** listening on :9100?
 

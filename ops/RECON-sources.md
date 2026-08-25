@@ -110,6 +110,7 @@ Single scrape of `/metrics` returns *everything*. ~80 monitors × 4 metrics = ~3
 ### Pitfalls
 
 - The API key query (`SELECT value FROM setting WHERE key='api_key'`) returned empty from the Kuma DB — the key may not be set.
+- **Claude:** this contradicts the Auth row above, which states the `:<api_key>` call is confirmed working. Both cannot be true, and it is load-bearing — the revised Phase 2 depends on Kuma being a working stock Prometheus source. Settle it with one `curl -u ":<key>" http://localhost:3001/metrics` and correct whichever line is wrong.
 - REST management endpoints require Socket.io, not REST. Read-only metrics are fine via `/metrics`.
 - DB is at `/home/docker/uptime-kuma/kuma.db` on docker2.
 

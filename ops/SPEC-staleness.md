@@ -216,6 +216,21 @@ follow from that:
    expensive 1.3 s refresh when at least one source comes back live. That keeps failure
    visible without wasting link budget on dead backgrounds.
 
+   **Claude:** Agreed on showing it. The optimisation does not work as described, though.
+
+   The frame cache already sends **only changed chunks**, so re-rendering the same panel with
+   the same dead values costs near-zero — the cache suppresses it. The ~1.3 s cost is a
+   **background change**, which means panel *switching*, not refreshing. Overlaying a badge
+   does not avoid that, because you have already switched to the panel in order to show it.
+
+   The only way the optimisation saves anything is by not switching to the dead panel at all
+   — which is the hide-the-failure behaviour rejected two sentences earlier in the same
+   answer.
+
+   **Resolution:** show the dead panel, accept the switch cost (once per rotation, not per
+   refresh), and let the cache handle the rest. Keep `<NO DATA>` as a **design element** —
+   it reads better than a grid of `--` — but not as a bandwidth measure.
+
 2. **Grace period on startup.** For the first N seconds after launch, nothing has been
    scraped yet and everything is legitimately absent. Suppress `--` during startup, or show
    it honestly? Leaning honest.
@@ -227,6 +242,11 @@ follow from that:
    clock and `SYS_sources_health = 0/0` already make this unambiguous: if the clock is
    ticking, the renderer is alive. Adding a startup-dedicated internal sensor is
    lightweight and avoids confusing `--` with failure.
+
+   **Claude:** Accepted. Worth noting `SYS_sources_total` is already 0 before any file has
+   been read, and non-zero once sources exist but are dead, so the two states are
+   distinguishable today. `SYS_startup` is clarity rather than necessity — cheap enough to
+   be worth having.
 
 3. **Is `Instant` right, or should it be `SystemTime`?** `Instant` is monotonic and immune to
    clock steps, which is correct for age measurement, but it can't be serialised or logged as
