@@ -1,0 +1,31 @@
+# Sensor label mapping for the Phase 1 host panel.
+#
+# Key   = label used in the panel definition
+# Value = label emitted by the sensor provider
+#
+# Rename to sensor-mapping.cfg to activate — asterctl loads that filename from
+# --config-dir by default.
+#
+# WHY THIS FILE EXISTS
+#
+# aster-sysinfo names disk sensors after the block device it found them on, so
+# the label differs on every machine:
+#
+#     disk_/dev/nvme0n1p2_usage_percent
+#     disk_/dev/vda_usage_percent
+#     disk_/dev/sda2_usage_percent
+#
+# The panel cannot hardcode that and stay portable, so it asks for a stable
+# label and this file resolves it per host. Find the right device with:
+#
+#     aster-sysinfo --console | grep usage_percent
+#
+# then set the line below to match. Without it, ROOT DISK renders "--" —
+# correctly, since the sensor it asked for genuinely does not exist.
+
+disk_root_usage_percent: disk_/dev/nvme0n1p2_usage_percent
+
+# Everything else the Phase 1 panel uses is already named consistently by
+# aster-sysinfo and needs no mapping:
+#   cpu_usage_percent  mem_usage_percent  load_avg_one
+#   temperature_cpu    system_uptime      system_hostname

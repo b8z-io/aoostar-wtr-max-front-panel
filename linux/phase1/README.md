@@ -40,6 +40,28 @@ sudo systemctl enable --now aster-sysinfo-host.service asterctl-panel.service
 `cp -r panels` preserves the `fonts` symlink, which resolves to `/opt/asterctl/fonts`.
 Copying the panel directory somewhere else on its own will break it.
 
+## One host-specific step: the disk sensor
+
+`aster-sysinfo` names disk sensors after the block device it found them on, so the
+label differs on every machine. The panel asks for a stable `disk_root_usage_percent`
+and a mapping file resolves it per host.
+
+```shell
+/opt/asterctl/bin/aster-sysinfo --console | grep usage_percent
+```
+
+Pick the device holding `/`, then:
+
+```shell
+sudo cp /opt/asterctl/cfg/sensor-mapping.cfg.example /opt/asterctl/cfg/sensor-mapping.cfg
+sudo nano /opt/asterctl/cfg/sensor-mapping.cfg    # set the device path
+sudo systemctl restart asterctl-panel
+```
+
+Until this is done ROOT DISK shows `--`. That is correct behaviour, not a fault: the
+sensor the panel asked for genuinely does not exist, and the staleness layer is
+refusing to invent one.
+
 ## Checks
 
 ```shell
