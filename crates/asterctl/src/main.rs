@@ -6,6 +6,7 @@
 
 use asterctl::cfg::{MonitorConfig, Panel, load_custom_panel};
 use asterctl::render::PanelRenderer;
+use asterctl::scrub::{DEFAULT_SCRUB_DURATION, ScrubSequence};
 use asterctl::sensors::{SensorFilter, read_filter_file, read_key_value_file, start_file_slurper};
 use asterctl::store::{SensorStore, StalenessConfig, parse_max_age_entries};
 use asterctl::{cfg, img};
@@ -14,7 +15,7 @@ use asterctl_lcd::{AooScreen, AooScreenBuilder, DISPLAY_SIZE};
 use anyhow::anyhow;
 use clap::Parser;
 use env_logger::Env;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -96,6 +97,21 @@ struct Args {
     #[arg(long, default_value_t = String::from("max-age.cfg"))]
     max_age_file: String,
 
+    /// Run a retention scrub every N minutes. Unset disables it.
+    ///
+    /// This panel holds a static image indefinitely, and a sensor layout never moves, so
+    /// the display gradually retains a ghost of whatever it has been showing. A scrub
+    /// drives every pixel through its full range to break that up.
+    ///
+    /// Each scrub frame changes the whole screen, so it costs a full transfer — about 1.3s
+    /// on this hardware. Twenty seconds an hour is well under 1% of the link.
+    #[arg(long)]
+    scrub_interval: Option<u64>,
+
+    /// How long each retention scrub runs, in seconds. Default 20.
+    #[arg(long)]
+    scrub_duration: Option<u64>,
+
     /// Switch off display n seconds after loading image or running demo.
     #[arg(short, long)]
     off_after: Option<u32>,
@@ -167,6 +183,10 @@ fn main() -> anyhow::Result<()> {
             sensor_path,
             img_save_path,
             staleness,
+            args.scrub_interval.map(|m| Duration::from_secs(m * 60)),
+            args.scrub_duration
+                .map(Duration::from_secs)
+                .unwrap_or(DEFAULT_SCRUB_DURATION),
         )?;
         return Ok(());
     }
@@ -293,6 +313,8 @@ fn run_sensor_panel<B: Into<PathBuf>>(
     sensor_path: B,
     img_save_path: Option<B>,
     staleness: StalenessConfig,
+    scrub_interval: Option<Duration>,
+    scrub_duration: Duration,
 ) -> anyhow::Result<()> {
     let font_dir = font_dir.into();
     let config_dir = config_dir.into();
@@ -325,8 +347,30 @@ fn run_sensor_panel<B: Into<PathBuf>>(
         .map(|v| Duration::from_millis((v * 1000.0) as u64))
         .unwrap_or(Duration::from_secs(5));
 
+    if let Some(interval) = scrub_interval {
+        info!(
+            "Retention scrub enabled: {}s every {}min",
+            scrub_duration.as_secs(),
+            interval.as_secs() / 60
+        );
+    }
+    let mut last_scrub = Instant::now();
+    let mut scrub_seed: u32 = 0x1234_5678;
+
     // panel switching loop
     loop {
+        // Between panels, never mid-panel: a scrub blanks the screen, and interrupting a
+        // panel to do it would look like a fault rather than maintenance.
+        if let Some(interval) = scrub_interval
+            && last_scrub.elapsed() >= interval
+        {
+            scrub_seed = scrub_seed
+                .wrapping_mul(1_664_525)
+                .wrapping_add(1_013_904_223);
+            run_scrub(screen, scrub_duration, scrub_seed)?;
+            last_scrub = Instant::now();
+        }
+
         let panel = cfg
             .get_next_active_panel()
             .ok_or(anyhow!("No active panel"))?;
@@ -360,6 +404,47 @@ fn run_sensor_panel<B: Into<PathBuf>>(
             refresh_count += 1;
         }
     }
+}
+
+/// Drive every pixel through its full range to break up a retained image.
+///
+/// Bounded by wall-clock time rather than a frame count, because each frame's transfer time
+/// depends on the link and we care about how long the screen is unavailable, not how many
+/// frames got sent.
+fn run_scrub(screen: &mut AooScreen, duration: Duration, seed: u32) -> anyhow::Result<()> {
+    info!("Starting retention scrub for {}s...", duration.as_secs());
+    let start = Instant::now();
+    let mut frames = 0u32;
+    let mut sequence = ScrubSequence::new(DISPLAY_SIZE, seed);
+
+    // `duration` is a minimum, not a deadline. A partial cycle conditions the display
+    // unevenly — cut off early it might show only white and black, never touching the
+    // individual colour channels or the noise pass — so always finish the cycle in
+    // progress. At roughly 1.3s per full-frame transfer, one cycle is about 13 seconds.
+    loop {
+        if start.elapsed() >= duration && sequence.at_cycle_start() {
+            break;
+        }
+        let Some(image) = sequence.next() else {
+            break;
+        };
+        screen.send_image(&image)?;
+        frames += 1;
+    }
+
+    if frames < ScrubSequence::cycle_len() as u32 {
+        warn!(
+            "Retention scrub sent only {frames} frames — the link is slower than expected \
+             and conditioning will be uneven"
+        );
+    }
+
+    info!(
+        "Retention scrub finished: {frames} frames in {}ms",
+        start.elapsed().as_millis()
+    );
+
+    Ok(())
 }
 
 fn update_panel(

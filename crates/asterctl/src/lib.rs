@@ -9,6 +9,7 @@ pub mod font;
 mod format_value;
 pub mod img;
 pub mod render;
+pub mod scrub;
 pub mod sensors;
 pub mod store;
 

@@ -62,6 +62,29 @@ Until this is done ROOT DISK shows `--`. That is correct behaviour, not a fault:
 sensor the panel asked for genuinely does not exist, and the staleness layer is
 refusing to invent one.
 
+## Image retention
+
+The panel arrived with the vendor logo ghosted into it — that image had been on screen
+continuously since the machine was built. A sensor layout has the same problem more
+slowly: fixed tiles, captions that never move, digits in the same place for years.
+
+`--scrub-interval 60` runs a conditioning cycle once an hour: full white and black to
+swing every subpixel between extremes, each primary to exercise the colour channels
+separately, then noise to break up any spatial pattern. It takes roughly 25 seconds,
+during which the panel shows the scrub rather than data.
+
+Scrubs run **between panels, never mid-panel**, so they never interrupt a reading.
+
+To disable, drop the flag. To watch one:
+
+```shell
+journalctl -u asterctl-panel -f | grep -i scrub
+```
+
+Existing retention usually fades over days once varied content is displayed. If it has
+not improved after a week of scrubbing, the remaining option is a lighter background,
+which hides a ghost better than a dark one does.
+
 ## Checks
 
 ```shell

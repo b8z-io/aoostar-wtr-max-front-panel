@@ -23,7 +23,13 @@ ExecStart=/opt/asterctl/bin/asterctl \
     --font-dir /opt/asterctl/fonts \
     --panels /opt/asterctl/panels/phase1-host \
     --sensor-path /run/asterctl/sensors \
-    --max-age 10
+    --max-age 10 \
+    --scrub-interval 60
+
+# The scrub blanks the panel for ~25s an hour to counter image retention. This display
+# holds a static image indefinitely and a sensor layout never moves, so without it the
+# panel slowly burns in its own tiles — the vendor logo already ghosted through after
+# months on screen.
 
 # The frame cache lives in this process, so every restart costs a full-frame
 # redraw of roughly 1.3s over a 12 Mbps link. Do not restart tightly.
