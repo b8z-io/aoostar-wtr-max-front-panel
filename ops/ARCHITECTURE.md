@@ -126,21 +126,48 @@ reliably survive reboots. Hermes's point, and correct.
 ## 3. Proposed topology
 
 ```
-pve-nas host  — no Docker, no LXC, three static binaries + three systemd units
+pve-nas host  — no Docker, no LXC, static binaries + systemd units
 │
-├── node_exporter                          :9100/metrics   stateless, zero writes
-│
-├── aster-prom  ← localhost:9100      →  /run/asterctl/sensors/host.txt
-├── aster-prom  ← docker2:<port>      →  /run/asterctl/sensors/homelab.txt
+├── aster-sysinfo --refresh 3     →  /run/asterctl/sensors/host.txt      (Phase 1)
+├── aster-prom  ← kuma/metrics    →  /run/asterctl/sensors/kuma.txt      (Phase 2)
+├── aster-prom  ← docker2:<port>  →  /run/asterctl/sensors/homelab.txt   (Phase 3)
 │
 └── asterctl --sensor-path /run/asterctl/sensors  ──USB serial──▶  front panel
 
-docker2 (VM)
-└── panel-metrics container  →  Prometheus text on :<port>
-    fans out to TrueNAS / Uptime-Kuma / Home Assistant / OPNsense / Speedtest-Tracker
+docker2 (VM 222, same physical host)
+└── panel-metrics container  →  Prometheus text on :<port>               (Phase 3)
+    fans out to TrueNAS / OPNsense / Home Assistant / GPU-inside-the-VM
 ```
 
-### Why two `aster-prom` instances
+### Correction: node_exporter is not the Phase 1 source
+
+An earlier revision of this document proposed `node_exporter` + `aster-prom` for host vitals.
+**That was wrong, and it was my error, not Hermes's.** Verified by running both tools:
+
+`node_exporter` publishes raw counters and byte totals — `node_cpu_seconds_total` is
+cumulative, memory is `MemAvailable`/`MemTotal` in bytes, filesystems are `avail`/`size`.
+Turning those into the percentages a panel displays needs a *rate* and some arithmetic, which
+is exactly the job of the Prometheus server we deliberately did not deploy. `aster-prom`
+passes values through verbatim — no rates, no ratios — and `asterctl` only formats digits. So
+a CPU tile fed from `node_exporter` would display an ever-increasing counter.
+
+`aster-sysinfo`, already in this repo, emits the derived values directly:
+
+```
+cpu_usage_percent: 5.74      mem_usage_percent: 9.2       load_avg_one: 0.58
+system_uptime: 00:13         disk_/dev/vda_usage_percent: 88.5
+temperature_*                network_<if>_address0
+```
+
+60 keys, no network, no HTTP, no Prometheus, and `cfg/sensor-mapping/sysinfo-to-aoostar.cfg`
+already maps them to panel labels. It is strictly the better Phase 1 source.
+
+The general lesson: "speaks Prometheus" is not the same as "is panel-shaped". What matters is
+whether the source emits values that can be rendered without arithmetic. Uptime-Kuma passes
+that test — `uptime_kuma_uptime` is already a 0-100 ratio, `uptime_kuma_status` is 1/0,
+`uptime_kuma_response_time` is milliseconds — which is why Phase 2 still stands.
+
+### Why one sensor file per source
 
 `asterctl`'s file watcher reads **a whole directory**, not a single file
 (`crates/asterctl/src/sensors.rs`, `read_path` / `start_file_slurper`). Every `.txt` file in
@@ -299,19 +326,18 @@ The original inventory lists nine sources and ~30 metrics. The panel is 960 × 3
 roughly 6–10 values legibly per panel. The list is a wishlist, not a plan; each source is an
 integration with its own auth and failure mode.
 
-**Revised after recon.** Uptime-Kuma exposes native Prometheus text, and `node_exporter` is
-a stock binary. So **Phases 1 and 2 require no bespoke code at all** — two stock binaries plus
-`aster-prom`. `panel-metrics` is deferred to Phase 3, which is where the only component we
-have to write and maintain now lives. That lets the whole pipeline be proven against real
-endpoints before anything custom exists.
+**Revised after recon, then corrected.** **Phases 1 and 2 require no bespoke code** — both
+sources are tools that already exist. `panel-metrics` is deferred to Phase 3, where the only
+component we have to write and maintain now lives. That lets the pipeline be proven against
+real data before anything custom exists.
 
-**Phase 1 — vertical slice.** `node_exporter` on `pve-nas`, bound to localhost. One custom
-panel: CPU, memory, load, uptime, host temp, clock, staleness indicator. Proves serial +
-scrape + mapping + render + honesty rules end to end. No custom code.
+**Phase 1 — vertical slice.** `aster-sysinfo` on `pve-nas` writing `host.txt` every 3s. One
+custom panel: CPU %, memory %, load, uptime, host temp, clock, staleness indicator. Proves
+serial + render + mapping + honesty rules end to end. No network, no new binaries to source.
 
-**Phase 2 — second stock source.** Add Uptime-Kuma's `/metrics` via a second `aster-prom`
-instance writing `kuma.txt`. Second panel, rotation enabled, per-source max ages exercised
-for real. Still no custom code.
+**Phase 2 — second source.** Uptime-Kuma's `/metrics` via `aster-prom` writing `kuma.txt`.
+Second panel, rotation enabled, per-source max ages exercised for real. Kuma's metrics are
+already panel-shaped gauges, so still no custom code.
 
 **Phase 3 — the bespoke part.** `panel-metrics` on docker2 aggregating TrueNAS, OPNsense,
 Home Assistant (Hypervolt EV state, and Speedtest via HA rather than a separate scrape) and
