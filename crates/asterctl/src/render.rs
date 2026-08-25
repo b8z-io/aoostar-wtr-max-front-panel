@@ -253,6 +253,15 @@ impl PanelRenderer {
             unit,
         );
         let size = text_size(scale, &font, &text);
+        // Vertical placement is centred on the *measured* glyph height, which is fine for
+        // digits but not for a placeholder: "--" is a fraction of the height of "42", so a
+        // stale value would drop well below the position its live counterpart occupies, and
+        // the panel would appear to shift as sources come and go. Measure the height from a
+        // representative digit instead, and keep the placeholder's own width for alignment.
+        let height_ref = match state {
+            ValueState::Live => size.1,
+            ValueState::Stale => text_size(scale, &font, "0").1,
+        };
         let width = sensor.width.unwrap_or_default() as i32;
         let height = sensor.height.unwrap_or_default() as i32;
         let x = match sensor.text_align.unwrap_or_default() {
@@ -265,7 +274,7 @@ impl PanelRenderer {
         // Some work better with `sensor.y + height / 2 - size.1 as i32;`
         // The y parameter in `draw_text_mut` is still a mystery: drawing text at position (0,0)
         // renders a huge gap at the top, about the size of half the font-height!?
-        let y = sensor.y + height / 2 - (size.1 as f32 * 1.3333 / 2f32) as i32;
+        let y = sensor.y + height / 2 - (height_ref as f32 * 1.3333 / 2f32) as i32;
 
         debug!(
             "Sensor({:03},{:03}), pixel({x:03},{y:03}), size{size:?}: {text}",

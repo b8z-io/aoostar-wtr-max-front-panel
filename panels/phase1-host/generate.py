@@ -7,6 +7,12 @@ Layout targets a 960x376 RGB565 LCD. Design notes:
   row-major buffer, so a full-width band is cheap to repaint and a narrow column
   pays a whole chunk per row. See ops/ARCHITECTURE.md section 5.
 - fontSize is NOT pixels: rendered ink height is 0.76x the JSON number.
+- Type is sized against the vendor's own boot logo, measured from a photograph of
+  the real panel: that logo is ~159 display px tall, 42% of the panel height. It
+  is the manufacturer's judgement of what reads on this glass at NAS-on-a-shelf
+  distance, and it is the only physical reference we have. Values here sit at
+  0.4-0.6x the logo, captions at ~0.16x. The first draft was 3-4x smaller than
+  this and would not have been readable.
 - Every value carries staleText/staleColor so a dead provider reads as absent
   rather than as a plausible number.
 """
@@ -46,19 +52,16 @@ def build_background(path):
     tile(d, COLS[0], TOP_Y, COL_W, TOP_H, ACCENT_CPU)
     tile(d, COLS[1], TOP_Y, COL_W, TOP_H, ACCENT_MEM)
     tile(d, COLS[2], TOP_Y, COL_W, TOP_H, ACCENT_DISK)
-    # divider inside the middle and right columns, separating their two readings
-    for c in (COLS[1], COLS[2]):
-        d.line([(c + 20, TOP_Y + 132), (c + COL_W - 20, TOP_Y + 132)], fill=TILE_EDGE)
     tile(d, MARGIN, BAR_Y, W - MARGIN * 2, BAR_H, ACCENT_NET)
 
     font_dir = pathlib.Path(__file__).parent / "fonts"
-    cap_font = ImageFont.truetype(str(font_dir / "DejaVuSans.ttf"), 15)
+    cap_font = ImageFont.truetype(str(font_dir / "DejaVuSans.ttf"), 26)
     for text, x, y, w in CAPTIONS:
         tw = d.textlength(text, font=cap_font)
         d.text((x + (w - tw) / 2, y), text, font=cap_font, fill=(125, 133, 144))
-    d.text((W - MARGIN - 300, BAR_Y + 14), "SOURCES LIVE", font=cap_font,
+    d.text((W - MARGIN - 320, BAR_Y + 8), "SOURCES LIVE", font=cap_font,
            fill=(125, 133, 144))
-    d.text((W - MARGIN - 166, BAR_Y + 48), "/", font=cap_font, fill=(90, 98, 108))
+    d.text((W - MARGIN - 150, BAR_Y + 40), "/", font=cap_font, fill=(90, 98, 108))
     img.save(path)
 
 
@@ -83,45 +86,45 @@ def sensor(label, x, y, w, h, size, colour, font="HarmonyOS_Sans_SC_Bold",
 # stay readable. Painting them also keeps them out of the chunk budget, since
 # the background is cached and never retransmitted.
 CAPTIONS = [
-    ("CPU",          COLS[0], TOP_Y + 18, COL_W),
-    ("PACKAGE TEMP", COLS[0], TOP_Y + 154, COL_W),
-    ("MEMORY",       COLS[1], TOP_Y + 18, COL_W),
-    ("LOAD 1M",      COLS[1], TOP_Y + 150, COL_W),
-    ("ROOT DISK",    COLS[2], TOP_Y + 18, COL_W),
-    ("UPTIME",       COLS[2], TOP_Y + 150, COL_W),
+    ("CPU",          COLS[0], TOP_Y + 12, COL_W),
+    ("PACKAGE TEMP", COLS[0], TOP_Y + 158, COL_W),
+    ("MEMORY",       COLS[1], TOP_Y + 12, COL_W),
+    ("LOAD 1M",      COLS[1], TOP_Y + 158, COL_W),
+    ("ROOT DISK",    COLS[2], TOP_Y + 12, COL_W),
+    ("UPTIME",       COLS[2], TOP_Y + 158, COL_W),
 ]
 
 
 s = []
 # --- column 1: CPU -------------------------------------------------------
-s.append(sensor("cpu_usage_percent", COLS[0], TOP_Y + 48, COL_W, 96, 76, FG,
+s.append(sensor("cpu_usage_percent", COLS[0], TOP_Y + 46, COL_W, 100, 116, FG,
                 unit="%", decimals=0))
-s.append(sensor("temperature_cpu", COLS[0], TOP_Y + 180, COL_W, 48, 40, ACCENT_CPU,
+s.append(sensor("temperature_cpu", COLS[0], TOP_Y + 192, COL_W, 48, 62, ACCENT_CPU,
                 unit=" °C", decimals=0))
 
 # --- column 2: memory over load -----------------------------------------
-s.append(sensor("mem_usage_percent", COLS[1], TOP_Y + 46, COL_W, 76, 56, FG,
+s.append(sensor("mem_usage_percent", COLS[1], TOP_Y + 46, COL_W, 100, 96, FG,
                 unit="%", decimals=0))
-s.append(sensor("load_avg_one", COLS[1], TOP_Y + 178, COL_W, 52, 44, ACCENT_MEM,
+s.append(sensor("load_avg_one", COLS[1], TOP_Y + 192, COL_W, 48, 66, ACCENT_MEM,
                 decimals=2))
 
 # --- column 3: disk over uptime -----------------------------------------
-s.append(sensor("disk_root_usage_percent", COLS[2], TOP_Y + 46, COL_W, 76, 56, FG,
+s.append(sensor("disk_root_usage_percent", COLS[2], TOP_Y + 46, COL_W, 100, 96, FG,
                 unit="%", decimals=0))
-s.append(sensor("system_uptime", COLS[2], TOP_Y + 178, COL_W, 52, 40, ACCENT_DISK))
+s.append(sensor("system_uptime", COLS[2], TOP_Y + 192, COL_W, 48, 58, ACCENT_DISK))
 
 # --- bottom bar: clock, host, source health ------------------------------
-s.append(sensor("DATE_h_m_s_1", MARGIN + 24, BAR_Y + 12, 260, BAR_H - 24, 46, FG,
+s.append(sensor("DATE_h_m_s_1", MARGIN + 22, BAR_Y + 10, 300, BAR_H - 20, 74, FG,
                 align="left"))
-s.append(sensor("DATE_y_m_d_2", MARGIN + 300, BAR_Y + 14, 200, 30, 20, DIM,
+s.append(sensor("DATE_y_m_d_2", MARGIN + 380, BAR_Y + 8, 240, 36, 30, DIM,
                 font="DejaVuSans", align="left"))
-s.append(sensor("system_hostname", MARGIN + 300, BAR_Y + 46, 200, 28, 20, DIM,
+s.append(sensor("system_hostname", MARGIN + 380, BAR_Y + 46, 240, 36, 30, DIM,
                 font="DejaVuSans", align="left"))
 # Source health is computed at render time, so it stays truthful when every
 # provider is dead. This is the element that says "the renderer is alive".
-s.append(sensor("SYS_sources_live", W - MARGIN - 300, BAR_Y + 38, 130, 40, 34,
+s.append(sensor("SYS_sources_live", W - MARGIN - 320, BAR_Y + 36, 150, 46, 54,
                 ACCENT_NET, align="right"))
-s.append(sensor("SYS_sources_total", W - MARGIN - 140, BAR_Y + 38, 116, 40, 34,
+s.append(sensor("SYS_sources_total", W - MARGIN - 128, BAR_Y + 36, 116, 46, 54,
                 DIM, align="left"))
 
 panel = {"id": "phase1-host", "name": "phase1-host", "img": "bg.png", "sensor": s}
