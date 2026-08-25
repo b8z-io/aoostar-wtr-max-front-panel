@@ -8,6 +8,7 @@ use crate::font::FontHandler;
 use crate::format_value;
 use crate::img::{ImageCache, Size, rotate_image};
 use crate::sensors::get_date_time_value;
+use crate::store::{SensorStore, ValueState};
 use ab_glyph::Font;
 use chrono::{DateTime, Local};
 use image::{ImageBuffer, Rgba, RgbaImage};
@@ -111,13 +112,13 @@ impl PanelRenderer {
     /// # Arguments
     ///
     /// * `panel`: the panel configuration
-    /// * `values`: current values for the defined panel sensors in a shared HashMap
+    /// * `values`: current sensor values with age tracking
     ///
     /// returns: a rendered panel image in [RgbaImage] format, or an [ImageProcessingError] in case of an error.
     pub fn render(
         &mut self,
         panel: &Panel,
-        values: &HashMap<String, String>,
+        values: &SensorStore,
     ) -> Result<RgbaImage, ImageProcessingError> {
         debug!(
             "Rendering panel {}...",
@@ -137,7 +138,7 @@ impl PanelRenderer {
         };
         self.composite_layer_map.clear();
 
-        let final_image = self.render_all_sensors(panel, values, background)?;
+        let final_image = self.render_all_sensors(panel, values, now, background)?;
 
         debug!("Rendered panel in {}ms", now.elapsed().as_millis());
 
@@ -155,27 +156,46 @@ impl PanelRenderer {
         Ok(final_image)
     }
 
-    /// Render all panel sensors with the given values on a background image
+    /// Render all panel sensors with the given values on a background image.
+    ///
+    /// Resolution order for each sensor label:
+    /// 1. a live value from the store
+    /// 2. an internally computed date/time sensor
+    /// 3. an internally computed `SYS_` source-health sensor
+    /// 4. the stale placeholder — only when staleness handling is enabled
+    ///
+    /// Internally computed sensors are calculated here rather than stored, so they keep
+    /// working when every provider is dead. That is what distinguishes "renderer alive, data
+    /// stale" from "everything dead" on the panel itself.
+    ///
+    /// With staleness handling disabled, an unresolved sensor is skipped entirely — the
+    /// historical behaviour.
     pub fn render_all_sensors(
         &mut self,
         panel: &Panel,
-        values: &HashMap<String, String>,
+        values: &SensorStore,
+        now: Instant,
         mut background: RgbaImage,
     ) -> Result<RgbaImage, ImageProcessingError> {
-        let now: DateTime<Local> = Local::now();
+        let local_now: DateTime<Local> = Local::now();
 
         for sensor in &panel.sensor {
-            let value = values.get(&sensor.label).cloned();
             let unit = values
-                .get(&format!("{}#unit", sensor.label))
-                .cloned()
+                .resolve(&format!("{}#unit", sensor.label), now)
+                .map(str::to_string)
                 .or_else(|| sensor.unit.clone())
                 .unwrap_or_default();
 
-            if let Some(value) = value {
-                self.render_sensor(&mut background, sensor, &value, &unit)?;
-            } else if let Some(value) = get_date_time_value(&sensor.label, &now) {
-                self.render_sensor(&mut background, sensor, &value, &unit)?;
+            if let Some(value) = values.resolve(&sensor.label, now) {
+                self.render_sensor(&mut background, sensor, value, &unit, ValueState::Live)?;
+            } else if let Some(value) = get_date_time_value(&sensor.label, &local_now) {
+                self.render_sensor(&mut background, sensor, &value, &unit, ValueState::Live)?;
+            } else if let Some(value) = values.sys_value(&sensor.label, now) {
+                self.render_sensor(&mut background, sensor, &value, &unit, ValueState::Live)?;
+            } else if values.staleness_enabled() {
+                // No unit on a placeholder: "-- °C" reads as a reading, "--" reads as absent.
+                let placeholder = sensor.stale_value();
+                self.render_sensor(&mut background, sensor, &placeholder, "", ValueState::Stale)?;
             }
         }
 
@@ -192,11 +212,12 @@ impl PanelRenderer {
         sensor: &Sensor,
         value: &str,
         unit: &str,
+        state: ValueState,
     ) -> Result<(), ImageProcessingError> {
         let direction = sensor.direction.unwrap_or(SensorDirection::LeftToRight);
 
         match sensor.mode {
-            SensorMode::Text => self.render_text(background, sensor, value, unit),
+            SensorMode::Text => self.render_text(background, sensor, value, unit, state),
             SensorMode::Fan => self.render_fan(sensor, value, direction),
             SensorMode::Progress => self.render_progress(sensor, value, direction),
             SensorMode::Pointer => self.render_pointer(sensor, value, direction),
@@ -210,6 +231,7 @@ impl PanelRenderer {
         sensor: &Sensor,
         value: &str,
         unit: &str,
+        state: ValueState,
     ) -> Result<(), ImageProcessingError> {
         let font = if let Some(font_family) = &sensor.font_family {
             self.font_handler.get_ttf_font_or_default(font_family)
@@ -250,7 +272,13 @@ impl PanelRenderer {
             sensor.x, sensor.y
         );
 
-        let font_color = sensor.font_color.unwrap_or_default().into();
+        // Colour carries two independent meanings: the configured colour (which a panel may
+        // drive from thresholds) says something about the *value*, the stale colour says
+        // there is no value. They must never be confused, so stale wins outright.
+        let font_color = match state {
+            ValueState::Live => sensor.font_color.unwrap_or_default().into(),
+            ValueState::Stale => sensor.stale_color().into(),
+        };
         draw_text_mut(background, font_color, x, y, scale, &font, &text);
 
         Ok(())

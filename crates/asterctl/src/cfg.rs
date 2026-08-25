@@ -400,6 +400,19 @@ pub struct Sensor {
     /// Pivot y
     #[serde(rename = "xz_y")]
     pub xz_y: Option<i32>,
+
+    /// Placeholder text rendered when this sensor has no current value.
+    ///
+    /// Fork addition, not part of the AOOSTAR-X configuration format. Optional and defaulted,
+    /// so vendor configuration files parse unchanged.
+    #[serde(default)]
+    pub stale_text: Option<String>,
+    /// Colour used when rendering a stale placeholder.
+    ///
+    /// Fork addition, not part of the AOOSTAR-X configuration format. Keep it clear of any
+    /// colour used for value thresholds — "no reading" must not look like "critical".
+    #[serde(default)]
+    pub stale_color: Option<FontColor>,
     /*
     // The following fields of the AOOSTAR-X json configuration file are NOT used in `asterctl`
     /// _Not (yet) used_
@@ -411,6 +424,35 @@ pub struct Sensor {
     /// For type = 6
     pub interval: Option<u32>,
      */
+}
+
+/// Default placeholder text for a sensor with no current value.
+pub const DEFAULT_STALE_TEXT: &str = "--";
+
+/// Default stale colour: mid-grey, deliberately outside any threshold palette.
+pub const DEFAULT_STALE_COLOR: Rgb<u8> = Rgb([128, 128, 128]);
+
+impl Sensor {
+    /// The value to render when this sensor has no current reading.
+    ///
+    /// Text sensors get a placeholder string. Graphical modes are driven by a number, so they
+    /// fall back to their minimum — an empty bar or a needle at rest. Paired with a `--` text
+    /// element that reads as "no data" rather than as a genuine low reading.
+    pub fn stale_value(&self) -> String {
+        match self.mode {
+            SensorMode::Text => self
+                .stale_text
+                .clone()
+                .unwrap_or_else(|| DEFAULT_STALE_TEXT.to_string()),
+            _ => self.min_value.unwrap_or_default().to_string(),
+        }
+    }
+
+    /// The configured stale colour, or the default mid-grey.
+    pub fn stale_color(&self) -> FontColor {
+        self.stale_color
+            .unwrap_or_else(|| DEFAULT_STALE_COLOR.into())
+    }
 }
 
 /// Sensor element type. Name is based on AOOSTAR-X web configuration

@@ -1,0 +1,16 @@
+# Per-source maximum age overrides for `asterctl --max-age-file`.
+#
+# Key   = sensor file stem (host.txt -> host)
+# Value = seconds before that source's values are treated as absent
+#
+# Falls back to --max-age for any source not listed here. With neither set,
+# staleness handling is off entirely and values never expire.
+#
+# Rename to max-age.cfg to activate: the default filename is deliberately
+# absent from the stock config so behaviour is unchanged out of the box.
+
+# local node_exporter scrape, 3s refresh
+host: 10
+
+# remote panel-metrics scrape over the network, slower and allowed more slack
+homelab: 90

@@ -7,13 +7,13 @@ use asterctl::render::PanelRenderer;
 use asterctl_lcd::{AooScreen, AooScreenBuilder, DISPLAY_SIZE};
 
 use ab_glyph::PxScale;
+use asterctl::store::SensorStore;
 use clap::Parser;
 use env_logger::Env;
 use image::imageops::FilterType;
 use image::{ImageReader, Rgb, RgbImage};
 use imageproc::drawing::{draw_line_segment_mut, draw_text_mut};
 use log::{error, info};
-use std::collections::HashMap;
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -128,12 +128,17 @@ fn run_demo(
         if let Some(panel) = cfg.get_next_active_panel() {
             info!("Displaying demo panel...");
 
-            // get sensor values from panel configuration
-            let mut demo_values = HashMap::new();
+            // get sensor values from panel configuration.
+            // Staleness is left unconfigured, so these demo values never expire.
+            let mut demo_values = SensorStore::default();
+            let source = demo_values.source_id("demo");
+            let now = Instant::now();
             for sensor in &panel.sensor {
                 demo_values.insert(
                     sensor.label.clone(),
                     sensor.value.clone().unwrap_or_default(),
+                    source,
+                    now,
                 );
             }
 

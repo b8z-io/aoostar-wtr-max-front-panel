@@ -1,6 +1,6 @@
 # SPEC — Sensor staleness and honest degradation
 
-**Status:** proposal, for review
+**Status:** implemented on `feat/staleness`, for review
 **Depends on:** [`ARCHITECTURE.md`](ARCHITECTURE.md) §6
 **Target:** first code change to this fork, before any panel artwork
 
@@ -88,9 +88,15 @@ since date/time sensors are computed at render time and never enter the map.
 | Mode | Live | Stale |
 |---|---|---|
 | Text | value + unit | `staleText` (default `--`), in `staleColor` |
-| Fan | arc at value | arc at minimum, `staleColor`, no fill |
-| Progress | bar at value | empty bar outline, `staleColor` |
-| Pointer | needle at value | needle at minimum, `staleColor` |
+| Fan | arc at value | arc at minimum |
+| Progress | bar at value | empty bar |
+| Pointer | needle at value | needle at minimum |
+
+**Deviation from the original design:** graphical modes are not recoloured. They are drawn
+from vendor-supplied images rather than filled programmatically, so tinting them would mean
+compositing a recolour pass over artwork we do not control. They fall back to their minimum
+instead, which reads as "no data" when paired with the `--` text elements beside them.
+`staleColor` therefore applies to text only.
 
 Two optional fields are added to `Sensor`, both `#[serde(default)]` so existing AOOSTAR-X
 JSON parses unchanged:
@@ -206,3 +212,48 @@ follow from that:
 3. **Is `Instant` right, or should it be `SystemTime`?** `Instant` is monotonic and immune to
    clock steps, which is correct for age measurement, but it can't be serialised or logged as
    a wall-clock time. Probably `Instant` for logic, wall clock only for log lines.
+
+---
+
+## 8. Implementation notes
+
+Built on branch `feat/staleness`. Verified: clean release build, 68 unit tests + 4 integration
+tests passing, no clippy warnings in `asterctl`.
+
+### Where things live
+
+| File | What |
+|---|---|
+| `crates/asterctl/src/store.rs` | New. `SensorStore`, `SensorValue`, `StalenessConfig`, `ValueState`, `SYS_` sensors |
+| `crates/asterctl/src/sensors.rs` | File slurper fills the store; `read_sensor_file` derives the source from the file stem |
+| `crates/asterctl/src/render.rs` | Resolution chain and stale rendering |
+| `crates/asterctl/src/cfg.rs` | `staleText` / `staleColor` fields, `Sensor::stale_value()` |
+| `crates/asterctl/src/main.rs` | `--max-age`, `--max-age-file` |
+| `crates/asterctl/tests/stale_render.rs` | Headless visual verification, three states |
+| `cfg/max-age.cfg.example` | Example per-source config |
+
+Sources are interned per sensor file stem, so age tracking is per provider with no
+configuration needed beyond the max age itself.
+
+### Known limitation: units baked into vendor backgrounds
+
+The rule in §3.3 — no unit on a placeholder — only governs units `asterctl` draws. The stock
+AOOSTAR-X panels have unit glyphs painted into the background JPEG, so a dead sensor on those
+panels shows `--` with a stranded `°C` beside it. Harmless but slightly untidy.
+
+Custom panels are unaffected, since we control their artwork. Worth keeping in mind as a
+reason to move to custom backgrounds sooner rather than later.
+
+### Verification renders
+
+`cargo test --test stale_render` writes three PNGs to `out/`:
+
+| File | State |
+|---|---|
+| `render_default_1_index-stale-1-all-live.png` | Both providers live |
+| `render_default_1_index-stale-2-homelab-dead.png` | One provider dead — the other keeps reporting |
+| `render_default_1_index-stale-3-all-dead.png` | Everything dead — clock still ticking |
+
+The second is the important one: it demonstrates the local-fallback behaviour the split
+architecture depends on. Host values keep updating while the remote provider's values drop to
+placeholders.

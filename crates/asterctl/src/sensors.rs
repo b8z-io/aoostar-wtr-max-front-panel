@@ -7,6 +7,7 @@
 //! - internal date time sensors
 //! - file-based value provider with simple key-value pairs.
 
+use crate::store::SensorStore;
 use chrono::{DateTime, Datelike, Local, Timelike};
 use log::{debug, error, info, warn};
 use notify::event::{ModifyKind, RenameMode};
@@ -19,6 +20,7 @@ use std::ops::DerefMut;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::{Arc, RwLock, mpsc};
+use std::time::Instant;
 
 pub fn get_date_time_value(label: &str, now: &DateTime<Local>) -> Option<String> {
     if !label.starts_with("DATE_") {
@@ -77,7 +79,7 @@ pub fn get_date_time_value(label: &str, now: &DateTime<Local>) -> Option<String>
 /// returns: Result<(), Error>
 pub fn start_file_slurper<P: Into<PathBuf>>(
     source_path: P,
-    values: Arc<RwLock<HashMap<String, String>>>,
+    values: Arc<RwLock<SensorStore>>,
     sensor_filter: Option<Vec<Regex>>,
 ) -> anyhow::Result<()> {
     let dir_path = source_path.into();
@@ -127,7 +129,7 @@ pub fn start_file_slurper<P: Into<PathBuf>>(
                         let mut val = file_values.write().expect("Poisoned sensor RwLock");
 
                         if let Err(e) =
-                            read_key_value_file(path, val.deref_mut(), sensor_filter.as_deref())
+                            read_sensor_file(path, val.deref_mut(), sensor_filter.as_deref())
                         {
                             warn!("Failed to read sensor file {path:?}: {e}");
                             continue;
@@ -156,7 +158,7 @@ pub fn start_file_slurper<P: Into<PathBuf>>(
 /// returns: Result<(), Error>
 fn read_path<P: AsRef<Path>>(
     path: P,
-    values: &mut HashMap<String, String>,
+    store: &mut SensorStore,
     sensor_filter: Option<&[Regex]>,
 ) -> anyhow::Result<()> {
     let path = path.as_ref();
@@ -166,7 +168,7 @@ fn read_path<P: AsRef<Path>>(
     }
 
     if path.is_file() {
-        return read_key_value_file(path, values, sensor_filter);
+        return read_sensor_file(path, store, sensor_filter);
     }
 
     for entry in fs::read_dir(path)? {
@@ -174,10 +176,42 @@ fn read_path<P: AsRef<Path>>(
 
         if path.is_file()
             && path.extension().unwrap_or_default() == "txt"
-            && let Err(e) = read_key_value_file(&path, values, sensor_filter)
+            && let Err(e) = read_sensor_file(&path, store, sensor_filter)
         {
             warn!("Failed to read sensor file {path:?}: {e}");
         }
+    }
+
+    Ok(())
+}
+
+/// Read a sensor source file into the timestamped [`SensorStore`].
+///
+/// The file stem identifies the source (`host.txt` → `host`), so every provider gets its own
+/// age tracking and can be reported on independently. All values from one read share a single
+/// timestamp.
+///
+/// # Arguments
+///
+/// * `path`: sensor source file to read.
+/// * `store`: store to insert the values into.
+/// * `sensor_filter`: Optional list of regex filters to filter out matching sensor keys.
+pub fn read_sensor_file<P: AsRef<Path>>(
+    path: P,
+    store: &mut SensorStore,
+    sensor_filter: Option<&[Regex]>,
+) -> anyhow::Result<()> {
+    let path = path.as_ref();
+    let source_name = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let source = store.source_id(&source_name);
+    let now = Instant::now();
+
+    for (key, value) in parse_key_value_file(path, sensor_filter)? {
+        store.insert(key, value, source, now);
     }
 
     Ok(())
@@ -202,8 +236,29 @@ pub fn read_key_value_file<P: AsRef<Path>>(
     values: &mut HashMap<String, String>,
     sensor_filter: Option<&[Regex]>,
 ) -> anyhow::Result<()> {
+    for (key, value) in parse_key_value_file(path, sensor_filter)? {
+        values.insert(key, value);
+    }
+
+    Ok(())
+}
+
+/// Parse a key-value file into trimmed, filtered pairs.
+///
+/// Shared by the plain-map reader used for configuration files and the [`SensorStore`]
+/// reader used for sensor values.
+///
+/// - Empty lines are skipped
+/// - Lines starting with # are skipped
+/// - Key-value pairs must be separated by `:`
+/// - All keys and values are trimmed
+fn parse_key_value_file<P: AsRef<Path>>(
+    path: P,
+    sensor_filter: Option<&[Regex]>,
+) -> anyhow::Result<Vec<(String, String)>> {
     debug!("Reading sensor file {:?}", path.as_ref());
 
+    let mut pairs = Vec::new();
     let file = fs::File::open(path)?;
     let reader = BufReader::new(file);
 
@@ -221,13 +276,13 @@ pub fn read_key_value_file<P: AsRef<Path>>(
                 continue;
             }
 
-            values.insert(key.trim().to_string(), value.trim().to_string());
+            pairs.push((key.trim().to_string(), value.trim().to_string()));
         } else {
             warn!("Skipping invalid entry in sensor value file: {line}");
         }
     }
 
-    Ok(())
+    Ok(pairs)
 }
 
 fn is_filtered(key: &str, filters: &[Regex]) -> bool {
