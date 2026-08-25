@@ -166,13 +166,14 @@ behaviour falls out of the design rather than needing to be built.
 ## 4. Why not Option C (single LXC)
 
 The LXC option is coherent and the USB-passthrough pattern is documented. Rejected on
-balance for four reasons:
+balance for four reasons, **in this order of weight** (revised after Hermes confirmed docker2
+is VM 222 on `pve-nas`):
 
 1. **`serialport` enumeration goes through libudev.** In an unprivileged LXC `/run/udev` is
    usually not populated, so `available_ports()` may return nothing and VID/PID
    auto-detection is lost. You'd have to hard-pin `--device`. That trades a solved problem
    for an unsolved one.
-2. **More moving parts on a fragile host.** USB passthrough to LXC alongside GPU passthrough
+2. **More moving parts on a fragile host** — *weakened, see below*. USB passthrough to LXC alongside GPU passthrough
    to docker2, on the box that recently caused an outage, is not where complexity belongs.
 3. **Dev iteration in LXC is clunkier than Docker** — the original report's own con.
 4. **It doesn't actually fix the dependency problem.** Anything outside `pve-nas` (TrueNAS,
@@ -239,6 +240,20 @@ numbers.
 | Many small scattered elements | Cost more than one consolidated block of equal area |
 | Anything narrower than ~24px | Pays a full chunk per row regardless |
 
+### `fontSize` is not pixels
+
+Measured from a rendered type specimen: `render_text` scales the configured `fontSize` by
+0.75 before converting through the font metrics, so the rendered ink height is consistently
+**0.76 x the JSON number**.
+
+| JSON `fontSize` | 12 | 16 | 20 | 24 | 30 | 38 |
+|---|---|---|---|---|---|---|
+| rendered ink height | 9px | 12px | 16px | 19px | 23px | 29px |
+
+To hit a target pixel height, multiply by 1.3. Guidance expressed in pixels (for example
+"body text at 12-14px") must be converted before it goes into a panel file, or elements come
+out about a third smaller than intended.
+
 Panel refresh and rotation are config: `setup.refresh` (seconds, float) and
 `setup.switchTime` in the monitor JSON.
 
@@ -284,15 +299,24 @@ The original inventory lists nine sources and ~30 metrics. The panel is 960 × 3
 roughly 6–10 values legibly per panel. The list is a wishlist, not a plan; each source is an
 integration with its own auth and failure mode.
 
-**Phase 1 — vertical slice.** `node_exporter` on `pve-nas` only. One custom panel: CPU,
-memory, load, uptime, host temp, clock, staleness indicator. Proves serial + scrape + render
-+ honesty rules end to end.
+**Revised after recon.** Uptime-Kuma exposes native Prometheus text, and `node_exporter` is
+a stock binary. So **Phases 1 and 2 require no bespoke code at all** — two stock binaries plus
+`aster-prom`. `panel-metrics` is deferred to Phase 3, which is where the only component we
+have to write and maintain now lives. That lets the whole pipeline be proven against real
+endpoints before anything custom exists.
 
-**Phase 2.** Add `panel-metrics` with TrueNAS (pool health, disk temps, capacity) and
-Uptime-Kuma (monitors up/down). Second panel, rotation enabled.
+**Phase 1 — vertical slice.** `node_exporter` on `pve-nas`, bound to localhost. One custom
+panel: CPU, memory, load, uptime, host temp, clock, staleness indicator. Proves serial +
+scrape + mapping + render + honesty rules end to end. No custom code.
 
-**Phase 3.** Speedtest-Tracker, OPNsense, Home Assistant (EV charge as a progress sensor),
-Docker counts. Editorial pass on what earns space.
+**Phase 2 — second stock source.** Add Uptime-Kuma's `/metrics` via a second `aster-prom`
+instance writing `kuma.txt`. Second panel, rotation enabled, per-source max ages exercised
+for real. Still no custom code.
+
+**Phase 3 — the bespoke part.** `panel-metrics` on docker2 aggregating TrueNAS, OPNsense,
+Home Assistant (Hypervolt EV state, and Speedtest via HA rather than a separate scrape) and
+GPU stats from inside the VM. Sample responses and pitfalls for each are in
+[`RECON-sources.md`](RECON-sources.md). Editorial pass on what earns space.
 
 **Phase 4.** Design polish — custom backgrounds, gauges, day/night themes.
 
