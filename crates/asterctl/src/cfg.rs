@@ -6,11 +6,11 @@
 //! Derived from the available Monitor3.json file in AOOSTAR-X v1.3.4.
 //! Likely not fully compatible with files created with the original editor.
 
+use crate::sensors::SensorFilter;
 use anyhow::Context;
 use image::{Rgb, Rgba};
 use imageproc::definitions::HasWhite;
 use log::{info, warn};
-use regex::Regex;
 use serde::de::Visitor;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_repr::{Deserialize_repr, Serialize_repr};
@@ -125,7 +125,7 @@ pub struct MonitorConfig {
     sensor_mapping: Option<HashMap<String, String>>,
     /// Internal sensor filter
     #[serde(skip)]
-    pub sensor_filter: Option<Vec<Regex>>,
+    pub sensor_filter: Option<SensorFilter>,
 }
 
 impl MonitorConfig {

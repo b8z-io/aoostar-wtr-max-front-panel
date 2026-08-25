@@ -80,13 +80,13 @@ pub fn get_date_time_value(label: &str, now: &DateTime<Local>) -> Option<String>
 pub fn start_file_slurper<P: Into<PathBuf>>(
     source_path: P,
     values: Arc<RwLock<SensorStore>>,
-    sensor_filter: Option<Vec<Regex>>,
+    sensor_filter: Option<SensorFilter>,
 ) -> anyhow::Result<()> {
     let dir_path = source_path.into();
     // read existing file(s)
     {
         let mut val = values.write().expect("Failed to lock values");
-        read_path(&dir_path, val.deref_mut(), sensor_filter.as_deref())?;
+        read_path(&dir_path, val.deref_mut(), sensor_filter.as_ref())?;
     }
 
     let file_values = values.clone();
@@ -129,7 +129,7 @@ pub fn start_file_slurper<P: Into<PathBuf>>(
                         let mut val = file_values.write().expect("Poisoned sensor RwLock");
 
                         if let Err(e) =
-                            read_sensor_file(path, val.deref_mut(), sensor_filter.as_deref())
+                            read_sensor_file(path, val.deref_mut(), sensor_filter.as_ref())
                         {
                             warn!("Failed to read sensor file {path:?}: {e}");
                             continue;
@@ -159,7 +159,7 @@ pub fn start_file_slurper<P: Into<PathBuf>>(
 fn read_path<P: AsRef<Path>>(
     path: P,
     store: &mut SensorStore,
-    sensor_filter: Option<&[Regex]>,
+    sensor_filter: Option<&SensorFilter>,
 ) -> anyhow::Result<()> {
     let path = path.as_ref();
 
@@ -199,7 +199,7 @@ fn read_path<P: AsRef<Path>>(
 pub fn read_sensor_file<P: AsRef<Path>>(
     path: P,
     store: &mut SensorStore,
-    sensor_filter: Option<&[Regex]>,
+    sensor_filter: Option<&SensorFilter>,
 ) -> anyhow::Result<()> {
     let path = path.as_ref();
     let source_name = path
@@ -260,7 +260,7 @@ fn age_between(modified: SystemTime, now: SystemTime) -> Duration {
 pub fn read_key_value_file<P: AsRef<Path>>(
     path: P,
     values: &mut HashMap<String, String>,
-    sensor_filter: Option<&[Regex]>,
+    sensor_filter: Option<&SensorFilter>,
 ) -> anyhow::Result<()> {
     for (key, value) in parse_key_value_file(path, sensor_filter)? {
         values.insert(key, value);
@@ -280,7 +280,7 @@ pub fn read_key_value_file<P: AsRef<Path>>(
 /// - All keys and values are trimmed
 fn parse_key_value_file<P: AsRef<Path>>(
     path: P,
-    sensor_filter: Option<&[Regex]>,
+    sensor_filter: Option<&SensorFilter>,
 ) -> anyhow::Result<Vec<(String, String)>> {
     debug!("Reading sensor file {:?}", path.as_ref());
 
@@ -296,7 +296,7 @@ fn parse_key_value_file<P: AsRef<Path>>(
         }
         if let Some((key, value)) = line.split_once(':') {
             if let Some(filter) = sensor_filter
-                && is_filtered(key, filter)
+                && !filter.allows(key)
             {
                 debug!("Filtered: {key}");
                 continue;
@@ -311,27 +311,57 @@ fn parse_key_value_file<P: AsRef<Path>>(
     Ok(pairs)
 }
 
-fn is_filtered(key: &str, filters: &[Regex]) -> bool {
-    filters.iter().any(|re| re.is_match(key))
+/// Key-matching rules for sensor values.
+///
+/// The original behaviour was a pure denylist: a key matching any pattern was dropped. That
+/// cannot express "keep only these", which is what a large source needs — an Uptime-Kuma
+/// scrape carries hundreds of series when a panel displays a dozen. Inverting a denylist
+/// would need negative lookahead, which the `regex` crate does not support, and an
+/// "everything except these" list breaks as soon as the source gains a metric.
+///
+/// So a filter file may now also carry *keep* patterns, written with a leading `!`. When any
+/// are present a key must match one of them to survive; the denylist is then applied to
+/// whatever remains. A file with no `!` lines behaves exactly as before.
+#[derive(Debug, Clone, Default)]
+pub struct SensorFilter {
+    keep: Vec<Regex>,
+    deny: Vec<Regex>,
+}
+
+impl SensorFilter {
+    /// Whether a sensor key survives the filter.
+    pub fn allows(&self, key: &str) -> bool {
+        if !self.keep.is_empty() && !self.keep.iter().any(|re| re.is_match(key)) {
+            return false;
+        }
+        !self.deny.iter().any(|re| re.is_match(key))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.keep.is_empty() && self.deny.is_empty()
+    }
 }
 
 /// Read the sensor filter configuration file.
 ///
-/// This is a simple text file containing multiple RegEx expressions.
-/// - one RegEx per line
-/// - Empty lines are skipped
-/// - Lines starting with # are skipped
+/// A simple text file of regular expressions, one per line.
+/// - Lines starting with `!` are **keep** patterns: when any are present, a key must match
+///   one of them to survive.
+/// - All other lines are **drop** patterns: a key matching one is discarded.
+/// - Empty lines and lines starting with `#` are skipped.
+///
+/// Keep patterns are applied first, then drop patterns to what remains, so the two can be
+/// combined — keep one source's metrics, then drop the `#unit` suffixes within them.
 ///
 /// # Arguments
 ///
 /// * `path`: file path to read.
 ///
-/// returns: None if the file is empty or contains no valid RegEx expressions.
-///
-pub fn read_filter_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Option<Vec<Regex>>> {
+/// returns: None if the file contains no valid expressions.
+pub fn read_filter_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Option<SensorFilter>> {
     debug!("Reading sensor filter file {:?}", path.as_ref());
 
-    let mut filters = Vec::new();
+    let mut filter = SensorFilter::default();
     let file = fs::File::open(path)?;
     let reader = BufReader::new(file);
 
@@ -342,20 +372,33 @@ pub fn read_filter_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Option<Vec<Re
             continue;
         }
 
-        match Regex::new(line) {
-            Ok(re) => {
-                filters.push(re);
-            }
+        let (pattern, is_keep) = match line.strip_prefix('!') {
+            Some(rest) => (rest.trim(), true),
+            None => (line, false),
+        };
+        if pattern.is_empty() {
+            warn!("Skipping empty filter pattern in sensor filter file");
+            continue;
+        }
+
+        match Regex::new(pattern) {
+            Ok(re) if is_keep => filter.keep.push(re),
+            Ok(re) => filter.deny.push(re),
             Err(e) => {
                 warn!("Skipping invalid filter in sensor filter file: {line}: {e}");
             }
         }
     }
 
-    if filters.is_empty() {
+    if filter.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(filters))
+        info!(
+            "Sensor filter: {} keep pattern(s), {} drop pattern(s)",
+            filter.keep.len(),
+            filter.deny.len()
+        );
+        Ok(Some(filter))
     }
 }
 
@@ -423,18 +466,27 @@ mod tests {
         );
     }
 
-    #[test]
-    fn is_filtered_does_not_filter_without_filters() {
-        let key = "foobar";
-        let filters = Vec::new();
-        assert!(!is_filtered(key, &filters));
+    fn filter_from(lines: &[&str]) -> SensorFilter {
+        let mut f = SensorFilter::default();
+        for l in lines {
+            match l.strip_prefix('!') {
+                Some(k) => f.keep.push(Regex::new(k).expect("valid regex")),
+                None => f.deny.push(Regex::new(l).expect("valid regex")),
+            }
+        }
+        f
     }
 
     #[test]
-    fn test_unit_extension_filter() {
-        let key = "temperature_cpu#unit";
-        let filters = vec![Regex::new("^temperature_.*#unit").unwrap()];
-        assert!(is_filtered(key, &filters));
+    fn an_empty_filter_allows_everything() {
+        assert!(SensorFilter::default().allows("foobar"));
+    }
+
+    #[test]
+    fn unit_suffixes_can_be_dropped() {
+        let f = filter_from(&["^temperature_.*#unit"]);
+        assert!(!f.allows("temperature_cpu#unit"));
+        assert!(f.allows("temperature_cpu"));
     }
 
     #[rstest]
@@ -442,17 +494,11 @@ mod tests {
     #[case(vec!["^bar"])]
     #[case(vec!["other"])]
     #[case(vec!["123", "bla", "other"])]
-    fn is_filtered_does_not_filter_without_a_match(#[case] filters: Vec<&str>) {
-        let key = "foobar";
-        let filters: Vec<Regex> = filters
-            .iter()
-            .map(|f| Regex::new(f).expect("Invalid regex"))
-            .collect();
+    fn a_non_matching_drop_pattern_leaves_the_key(#[case] patterns: Vec<&str>) {
         assert!(
-            !is_filtered(key, &filters),
-            "Filter {filters:?} should not match {key}"
+            filter_from(&patterns).allows("foobar"),
+            "{patterns:?} should not drop foobar"
         );
-        //
     }
 
     #[rstest]
@@ -460,17 +506,44 @@ mod tests {
     #[case(vec!["bar"])]
     #[case(vec!["^.+bar"])]
     #[case(vec!["123", "foo", "other"])]
-    #[case(vec!["bar", "123"])]
-    #[case(vec!["^.+bar", "other"])]
-    fn is_filtered_matches_filters(#[case] filters: Vec<&str>) {
-        let key = "foobar";
-        let filters: Vec<Regex> = filters
-            .iter()
-            .map(|f| Regex::new(f).expect("Invalid regex"))
-            .collect();
+    fn a_matching_drop_pattern_removes_the_key(#[case] patterns: Vec<&str>) {
         assert!(
-            is_filtered(key, &filters),
-            "Filter {filters:?} match match {key}"
+            !filter_from(&patterns).allows("foobar"),
+            "{patterns:?} should drop foobar"
         );
+    }
+
+    /// The behaviour the denylist could not express: keep a named subset and discard the rest.
+    #[test]
+    fn keep_patterns_restrict_to_a_named_subset() {
+        let f = filter_from(&[r#"!monitor_name="internet""#, r#"!monitor_name="traefik""#]);
+
+        assert!(f.allows(r#"uptime_kuma_status{monitor_name="internet",type="group"}"#));
+        assert!(f.allows(r#"uptime_kuma_response_time{monitor_name="traefik"}"#));
+        assert!(
+            !f.allows(r#"uptime_kuma_status{monitor_name="immich"}"#),
+            "a monitor not named in the keep list must be dropped"
+        );
+    }
+
+    #[test]
+    fn drop_patterns_still_apply_within_kept_keys() {
+        let f = filter_from(&[r#"!monitor_name="internet""#, "#unit$"]);
+
+        assert!(f.allows(r#"uptime_kuma_status{monitor_name="internet"}"#));
+        assert!(
+            !f.allows(r#"uptime_kuma_status{monitor_name="internet"}#unit"#),
+            "keep admits the key, then drop removes it"
+        );
+    }
+
+    /// Regression guard for the inversion trap: a file listing what you want, with no `!`,
+    /// is a denylist and removes exactly those keys. The `!` is what makes it an allowlist.
+    #[test]
+    fn without_a_bang_a_pattern_drops_rather_than_keeps() {
+        let named = r#"uptime_kuma_status{monitor_name="internet"}"#;
+
+        assert!(!filter_from(&[r#"monitor_name="internet""#]).allows(named));
+        assert!(filter_from(&[r#"!monitor_name="internet""#]).allows(named));
     }
 }

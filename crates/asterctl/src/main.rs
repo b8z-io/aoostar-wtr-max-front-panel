@@ -6,7 +6,7 @@
 
 use asterctl::cfg::{MonitorConfig, Panel, load_custom_panel};
 use asterctl::render::PanelRenderer;
-use asterctl::sensors::{read_filter_file, read_key_value_file, start_file_slurper};
+use asterctl::sensors::{SensorFilter, read_filter_file, read_key_value_file, start_file_slurper};
 use asterctl::store::{SensorStore, StalenessConfig, parse_max_age_entries};
 use asterctl::{cfg, img};
 use asterctl_lcd::{AooScreen, AooScreenBuilder, DISPLAY_SIZE};
@@ -15,7 +15,6 @@ use anyhow::anyhow;
 use clap::Parser;
 use env_logger::Env;
 use log::{debug, error, info};
-use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -266,7 +265,7 @@ fn load_staleness(
     Ok(staleness)
 }
 
-fn load_sensor_filter(mapping_cfg: &Path) -> anyhow::Result<Option<Vec<Regex>>> {
+fn load_sensor_filter(mapping_cfg: &Path) -> anyhow::Result<Option<SensorFilter>> {
     if let Some(parent) = mapping_cfg.parent()
         && let Some(file_stem) = mapping_cfg.file_stem()
         && let Some(extension) = mapping_cfg.extension()
