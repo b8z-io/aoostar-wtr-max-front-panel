@@ -12,12 +12,15 @@ After=local-fs.target
 
 [Service]
 Type=exec
-DynamicUser=true
+User=asterctl
+Group=asterctl
 
 # Owns the shared runtime directory. Preserved across restarts so the reader
 # does not lose the directory out from under it when this unit is bounced.
 RuntimeDirectory=asterctl
 RuntimeDirectoryPreserve=yes
+# Renderer runs as the same user — no cross-user access issues.
+RuntimeDirectoryMode=0755
 
 # --temp-dir must be on the same filesystem as --out: the write is an atomic
 # rename, which cannot cross filesystems.
@@ -28,10 +31,6 @@ ExecStart=/opt/asterctl/bin/aster-sysinfo \
 
 Restart=on-failure
 RestartSec=5
-
-# Sensor files must be readable by the renderer, which runs as a different
-# dynamic user.
-UMask=002
 
 # START lock down
 CapabilityBoundingSet=
