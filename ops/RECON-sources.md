@@ -72,7 +72,7 @@ GET /api/states/sensor.hypervolt_session_energy
 
 ## Uptime-Kuma
 
-> **Auth settled 2026-08-25:** Key format is `uk<ID>_<secret>`. Working key created for Phase 2: `uk12_kuma-400830c993162dc4090987f51fd74e86a234bf9d8e875e24`.
+> **Auth settled 2026-08-25:** Key format is `uk<ID>_<secret>` (row ID + underscore + random bytes). Key stored in Kuma DB under `api_key` table, name `panel-metrics`. Plaintext saved to `~/.hermes/secrets/kuma-panel-metrics.key`. **Never paste a credential value into a repo file.**
 
 | Field | Value |
 |---|---|
@@ -308,7 +308,7 @@ GET /api/speedtest/latest
 | Priority | Source | Cost | Provides | Auth | Status |
 |---|---|---|---|---|---|---|
 | 🟢 Free (Phase 1) | `node_exporter` on pve-nas host | `apt install`, static binary | CPU, mem, load, uptime, host temps | Localhost bound | **BLOCKED** — needs SSH to pve-nas host (password auth disabled) |
-| 🟢 Free (Phase 2) | Uptime-Kuma `/metrics` | One HTTP call | 72-monitor status, cert health, response times, uptime | HTTP Basic `:<api_key>` in `uk<ID>_<secret>` format | 🟢 CONFIRMED key: `uk12_kuma-400830c993162dc4090987f51fd74e86a234bf9d8e875e24` |
+| 🟢 Free (Phase 2) | Uptime-Kuma `/metrics` | One HTTP call | 72-monitor status, cert health, response times, uptime | HTTP Basic `:<api_key>` in `uk<ID>_<secret>` format | 🟢 CONFIRMED — key in `~/.hermes/secrets/kuma-panel-metrics.key` |
 | 🟢 Free (Phase 3) | Home Assistant API | One HTTP call | Speedtest (already exists), Hypervolt EV state, any HA sensor | Bearer token | 🟢 CONFIRMED |
 | 🟢 Ready (Phase 2) | TrueNAS API | Bearer token in `secrets/` | Pool health, disk temps, capacity | Bearer token `~/.hermes/secrets/truenas-readonly.key` | 🟢 CONFIRMED (`vault` ONLINE) |
 | 🟢 Ready (Phase 3) | OPNsense API | API key+secret in `secrets/` | Firewall throughput, VPN status, gateway health | HTTP Basic `key:secret` from `~/.hermes/secrets/opnsense-hermes.env` | 🟢 CONFIRMED (WAN_GW Online) |
