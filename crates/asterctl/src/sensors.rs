@@ -20,7 +20,7 @@ use std::ops::DerefMut;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::{Arc, RwLock, mpsc};
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime};
 
 pub fn get_date_time_value(label: &str, now: &DateTime<Local>) -> Option<String> {
     if !label.starts_with("DATE_") {
@@ -208,13 +208,39 @@ pub fn read_sensor_file<P: AsRef<Path>>(
         .unwrap_or_else(|| "unknown".to_string());
 
     let source = store.source_id(&source_name);
-    let now = Instant::now();
+
+    // Age is taken from the file's modification time, not from the moment we happen to read
+    // it. Stamping the read time would make every value look fresh immediately after start-up
+    // — so a crash-restarted renderer would present hours-old numbers as live, which is the
+    // exact failure staleness handling exists to prevent.
+    //
+    // The stamp stays an Instant so comparisons remain monotonic and immune to clock steps;
+    // only the initial offset comes from the wall clock.
+    let updated = Instant::now()
+        .checked_sub(file_age(path))
+        .unwrap_or_else(Instant::now);
 
     for (key, value) in parse_key_value_file(path, sensor_filter)? {
-        store.insert(key, value, source, now);
+        store.insert(key, value, source, updated);
     }
 
     Ok(())
+}
+
+/// How long ago a file was last modified, or zero if that cannot be determined.
+fn file_age(path: &Path) -> Duration {
+    fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .map(|modified| age_between(modified, SystemTime::now()))
+        .unwrap_or_default()
+}
+
+/// Elapsed time between two wall-clock instants, clamped at zero.
+///
+/// A modification time in the future — clock skew, or a file touched by another host — yields
+/// zero rather than an error, so the value is treated as fresh instead of being discarded.
+fn age_between(modified: SystemTime, now: SystemTime) -> Duration {
+    now.duration_since(modified).unwrap_or_default()
 }
 
 /// Read a key-value-based sensor source file and store content in the provided hashmap.
@@ -336,7 +362,66 @@ pub fn read_filter_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Option<Vec<Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::{SensorStore, StalenessConfig};
     use rstest::rstest;
+
+    #[test]
+    fn age_between_measures_elapsed_wall_clock() {
+        let now = SystemTime::now();
+        let modified = now - Duration::from_secs(90);
+
+        assert_eq!(age_between(modified, now), Duration::from_secs(90));
+    }
+
+    #[test]
+    fn age_between_clamps_a_future_modification_time_to_zero() {
+        let now = SystemTime::now();
+        let modified = now + Duration::from_secs(600);
+
+        assert_eq!(
+            age_between(modified, now),
+            Duration::ZERO,
+            "clock skew must read as fresh, not as an error"
+        );
+    }
+
+    /// Regression guard: an old file must be stale the moment it is first read. Stamping the
+    /// read time instead of the modification time would make every restart resurrect dead data.
+    #[test]
+    fn an_old_sensor_file_is_stale_on_first_read() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("host.txt");
+        std::fs::write(&path, "cpu_usage_percent: 42\n").expect("write");
+
+        let hour_ago = SystemTime::now() - Duration::from_secs(3600);
+        let file = fs::File::options().write(true).open(&path).expect("open");
+        file.set_times(fs::FileTimes::new().set_modified(hour_ago))
+            .expect("set mtime");
+
+        let mut store = SensorStore::new(StalenessConfig::new(Some(Duration::from_secs(10))));
+        read_sensor_file(&path, &mut store, None).expect("read");
+
+        assert_eq!(
+            store.resolve("cpu_usage_percent", Instant::now()),
+            None,
+            "an hour-old file must not resolve as a live value"
+        );
+    }
+
+    #[test]
+    fn a_just_written_sensor_file_is_live() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("host.txt");
+        std::fs::write(&path, "cpu_usage_percent: 42\n").expect("write");
+
+        let mut store = SensorStore::new(StalenessConfig::new(Some(Duration::from_secs(10))));
+        read_sensor_file(&path, &mut store, None).expect("read");
+
+        assert_eq!(
+            store.resolve("cpu_usage_percent", Instant::now()),
+            Some("42")
+        );
+    }
 
     #[test]
     fn is_filtered_does_not_filter_without_filters() {
