@@ -72,13 +72,15 @@ GET /api/states/sensor.hypervolt_session_energy
 
 ## Uptime-Kuma
 
+> **Auth settled 2026-08-25:** Key format is `uk<ID>_<secret>`. Working key created for Phase 2: `uk12_kuma-400830c993162dc4090987f51fd74e86a234bf9d8e875e24`.
+
 | Field | Value |
 |---|---|
-| Host | `localhost:3001` (inside docker2) / `https://kuma.local.batesyboy.com` |
-| Auth | HTTP Basic Auth, username blank, password = API key: `curl -u ":<api_key>" http://localhost:3001/metrics` |
+| Host | `localhost:3001` (inside docker2) / `https://uptime-kuma.local.batesyboy.com` |
+| Auth | HTTP Basic Auth, username blank, password = API key in `uk<ID>_<secret>` format |
 | API root | `/metrics` — Prometheus text exposition format |
-| Rate limits | None. Kuma returns sub-100ms even with 80+ monitors. |
-| Phase | **Phase 2** — confirmed ready. |
+| Rate limits | None. Kuma returns sub-100ms even with 80+ monitors. Rate limiter at 60 req/min per API key. |
+| Phase | **Phase 2** — confirmed working. See sample below. |
 
 ### Sample response
 
@@ -109,10 +111,9 @@ Single scrape of `/metrics` returns *everything*. ~80 monitors × 4 metrics = ~3
 
 ### Pitfalls
 
-- The API key query (`SELECT value FROM setting WHERE key='api_key'`) returned empty from the Kuma DB — the key may not be set.
-- **Claude:** this contradicts the Auth row above, which states the `:<api_key>` call is confirmed working. Both cannot be true, and it is load-bearing — the revised Phase 2 depends on Kuma being a working stock Prometheus source. Settle it with one `curl -u ":<key>" http://localhost:3001/metrics` and correct whichever line is wrong.
+- API keys are stored **bcrypt-hashed** in the `api_key` table — no reverse read possible. Key format is `uk<ID>_<secret>` where `<ID>` is the DB row id. The `verifyAPIKey` function parses this format: it extracts the row id from between "uk" and "_", looks up the bcrypt hash, then verifies the `<secret>` portion. Arbitrary keys like `kuma-xxx` will always return 401.
 - REST management endpoints require Socket.io, not REST. Read-only metrics are fine via `/metrics`.
-- DB is at `/home/docker/uptime-kuma/kuma.db` on docker2.
+- The existing key named "hermes" (row 7) has an unknown plaintext. The "panel-metrics" key (row 12) was generated for this project. Save the plaintext wherever aster-prom stores its config — it's the one thing you can't regenerate from the DB.
 
 ---
 
@@ -304,11 +305,11 @@ GET /api/speedtest/latest
 
 ## Summary: recommended scrape priority
 
-| Priority | Source | Cost | Provides | Auth |
-|---|---|---|---|---|
-| 🟢 Free (Phase 1) | `node_exporter` on pve-nas host | `apt install`, static binary | CPU, mem, load, uptime, host temps | Localhost bound |
-| 🟢 Free (Phase 2) | Uptime-Kuma `/metrics` | One HTTP call | 80-monitor status, cert health, response times | HTTP Basic `:<api_key>` |
-| 🟢 Free (Phase 3) | Home Assistant API | One HTTP call | Speedtest (already exists), Hypervolt EV state, any HA sensor | Bearer token |
-| 🟢 Ready (Phase 2) | TrueNAS API | Bearer token in `secrets/` | Pool health, disk temps, capacity | Bearer token `~/.hermes/secrets/truenas-readonly.key` |
-| 🟢 Ready (Phase 3) | OPNsense API | API key+secret in `secrets/` | Firewall throughput, VPN status, gateway health | HTTP Basic `key:secret` from `~/.hermes/secrets/opnsense-hermes.env` |
-| 🔴 Skip | Speedtest-Tracker direct | — | Already in HA sensors | Use HA instead |
+| Priority | Source | Cost | Provides | Auth | Status |
+|---|---|---|---|---|---|---|
+| 🟢 Free (Phase 1) | `node_exporter` on pve-nas host | `apt install`, static binary | CPU, mem, load, uptime, host temps | Localhost bound | **BLOCKED** — needs SSH to pve-nas host (password auth disabled) |
+| 🟢 Free (Phase 2) | Uptime-Kuma `/metrics` | One HTTP call | 72-monitor status, cert health, response times, uptime | HTTP Basic `:<api_key>` in `uk<ID>_<secret>` format | 🟢 CONFIRMED key: `uk12_kuma-400830c993162dc4090987f51fd74e86a234bf9d8e875e24` |
+| 🟢 Free (Phase 3) | Home Assistant API | One HTTP call | Speedtest (already exists), Hypervolt EV state, any HA sensor | Bearer token | 🟢 CONFIRMED |
+| 🟢 Ready (Phase 2) | TrueNAS API | Bearer token in `secrets/` | Pool health, disk temps, capacity | Bearer token `~/.hermes/secrets/truenas-readonly.key` | 🟢 CONFIRMED (`vault` ONLINE) |
+| 🟢 Ready (Phase 3) | OPNsense API | API key+secret in `secrets/` | Firewall throughput, VPN status, gateway health | HTTP Basic `key:secret` from `~/.hermes/secrets/opnsense-hermes.env` | 🟢 CONFIRMED (WAN_GW Online) |
+| 🔴 Skip | Speedtest-Tracker direct | — | Already in HA sensors | Use HA instead | — |
