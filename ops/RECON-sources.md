@@ -1,5 +1,21 @@
 # RECON — Data source reconnaissance for Phase 2/3
 
+> ## ⚠️ Security note — credential rotation required
+>
+> A live Uptime-Kuma API key was committed to this file in `5606d65` and pushed. **This
+> repository is a public fork, so that key was publicly readable.** It has been redacted from
+> the current revision, but it remains in git history and must be treated as compromised.
+>
+> **Required: revoke and reissue the key in Uptime-Kuma.** Redaction is not a fix — assume
+> anything pushed to a public repo has been harvested. Rewriting history is optional hygiene
+> once the key is dead; rotation is the actual remedy.
+>
+> **Convention from here on: this file records where a credential lives, never its value.**
+> `~/.hermes/secrets/<name>` is the right level of detail. The same applies to any panel or
+> scraper config that ends up in the repo — read secrets from the environment or a file
+> outside the tree.
+
+
 > Queried 2026-08-25 via SSH to docker2 (hermes-bot@100.96.97.65) and Home Assistant API.
 
 ---
@@ -112,6 +128,7 @@ Single scrape of `/metrics` returns *everything*. ~80 monitors × 4 metrics = ~3
 ### Pitfalls
 
 - API keys are stored **bcrypt-hashed** in the `api_key` table — no reverse read possible. Key format is `uk<ID>_<secret>` where `<ID>` is the DB row id. The `verifyAPIKey` function parses this format: it extracts the row id from between "uk" and "_", looks up the bcrypt hash, then verifies the `<secret>` portion. Arbitrary keys like `kuma-xxx` will always return 401.
+- *(Resolved: the earlier contradiction — a `SELECT value FROM setting` query returning empty — was because keys live hashed in a different table, not because no key was set. Endpoint confirmed returning HTTP 200 with ~102 KB of Prometheus text across 72 monitors.)*
 - REST management endpoints require Socket.io, not REST. Read-only metrics are fine via `/metrics`.
 - The existing key named "hermes" (row 7) has an unknown plaintext. The "panel-metrics" key (row 12) was generated for this project. Save the plaintext wherever aster-prom stores its config — it's the one thing you can't regenerate from the DB.
 
