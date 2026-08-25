@@ -23,7 +23,7 @@
 # then set the line below to match. Without it, ROOT DISK renders "--" —
 # correctly, since the sensor it asked for genuinely does not exist.
 
-disk_root_usage_percent: disk_/dev/nvme0n1p2_usage_percent
+disk_root_usage_percent: disk_/dev/mapper/pve-root_usage_percent
 
 # Everything else the Phase 1 panel uses is already named consistently by
 # aster-sysinfo and needs no mapping:
