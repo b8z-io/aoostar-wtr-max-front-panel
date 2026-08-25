@@ -115,36 +115,70 @@ Single scrape of `/metrics` returns *everything*. ~80 monitors × 4 metrics = ~3
 
 ---
 
-## TrueNAS (VM)
+## TrueNAS (VM 247 on pve-nas)
+
+> **Credentials found:** `~/.hermes/secrets/truenas-readonly.key`
+> **Bearer token confirmed working against HTTPS.**
 
 | Field | Value |
 |---|---|
-| Host | `192.168.68.24:80` (reachable from docker2, confirmed via ping at 0.392ms) |
-| Auth | HTTP Basic Auth, root credentials (`root:charlie123`) or API key |
+| Host | `https://192.168.68.24` (HTTPS on 443 — HTTP port 80 did not respond) |
+| Auth | `Authorization: Bearer <token>` from `truenas-readonly.key` |
 | API root | `GET /api/v2.0/system/info` |
 | Rate limits | Unknown. TrueNAS API is synchronous and can block for slow ZFS operations. |
 | Phase | **Phase 2** — pool health, disk temps, capacity. |
 
-### Cheapest useful calls
+### Sample responses
 
-**System info (lightweight):**
+**System info (lightweight, ~2KB):**
 ```
 GET /api/v2.0/system/info
 ```
-Returns JSON with version, hostname, uptime, CPU model, physical RAM.
+```json
+{
+  "version": "25.04.2.6",
+  "hostname": "truenas",
+  "physmem": 33658900480,
+  "model": "AMD Ryzen 7 PRO 8845HS w/ Radeon 780M Graphics",
+  "cores": 4,
+  "physical_cores": 4,
+  "loadavg": [0.0, 0.0, 0.0],
+  "uptime_seconds": 375754,
+  "timezone": "Europe/London",
+  "system_product": "Standard PC (Q35 + ICH9, 2009)",
+  "ecc_memory": true
+}
+```
 
 **Pool health:**
 ```
 GET /api/v2.0/pool
 ```
-Returns array of pools with `status` (ONLINE/DEGRADED/OFFLINE), `healthy` bool, `size`/`allocated`/`free` in bytes.
+```json
+[
+  {
+    "id": 1,
+    "name": "vault",
+    "status": "ONLINE",
+    "path": "/mnt/vault",
+    "topology": {
+      "data": [{"name": "raidz1-0", "type": "RAIDZ1"}]
+    },
+    "scan": {
+      "function": "SCRUB",
+      "state": "FINISHED",
+      "errors": 0,
+      "percentage": 100.0
+    }
+  }
+]
+```
 
-**Disk temps (heavier — iterate per disk):**
+**Disk info (for temps):**
 ```
 GET /api/v2.0/disk
 ```
-Returns array of disks with `serial`, `model`, `size`, `type`. Pair with:
-
+Returns array of disks with `serial`, `model`, `size`, `type`, `tempt`. Pair with:
 ```
 GET /api/v2.0/disk/get_smart/<disk_name>
 ```
@@ -152,48 +186,83 @@ Returns SMART attributes including `Temperature_Celsius` (field 194).
 
 ### Pitfalls
 
-- TrueNAS is on **vmbr1** (separate physical NIC `enp100s0f1np1`), a different subnet from docker2's LAN. Reachable at the NFS IP `192.68.68.24` which is forwarded/routed — ping confirmed, but the HTTP API port (80) returned no response during recon. May need HTTPS (port 443) or a specific port.
-- API responses can be slow under ZFS scrub or resilver (many seconds). Set generous timeouts.
-- The `root:charlie123` credentials work for the web UI. If the API uses a different auth mechanism (API key), generate one via System → API Keys.
+- **API uses HTTPS, not HTTP.** Port 80 returned nothing; HTTPS on 443 worked immediately.
+- TrueNAS is on **vmbr1** (separate physical NIC `enp100s0f1np1`), but is reachable at `192.168.68.24` from docker2 at 0.392ms ping.
+- Bearer token in `~/.hermes/secrets/truenas-readonly.key` is stable and working.
+- API responses can be slow under ZFS scrub or resilver. The scrub just finished with 0 errors — good timing.
+- Pool is a single RAIDZ1 vdev named `vault`. Single pool, no second pool visible.
 - **Not scoped for Phase 1 or 3.** Only needed if a disk temperature or pool-health panel is desired.
 
 ---
 
 ## OPNsense
 
+> **Credentials found:** `~/.hermes/secrets/opnsense-hermes.env`
+> **API key + secret confirmed working via HTTP Basic Auth.**
+
 | Field | Value |
 |---|---|
-| Host | `192.168.68.1` (HTTPS) |
-| Auth | HTTP Basic Auth with API key/secret pair, or username:password |
+| Host | `https://192.168.68.1` (HTTPS) |
+| Auth | HTTP Basic Auth: key as username, secret as password |
 | API root | `GET /api/core/system/status` |
-| Rate limits | None observed, but OPNsense's PHP backend can be slow under load (50-200ms per call). |
+| Rate limits | None observed. OPNsense's PHP backend returns responses in 50-200ms. |
 | Phase | **Phase 3** — firewall throughput, VPN status, gateway health. |
 
-### Cheapest useful calls
+### Sample responses
 
-**System status (lightweight ping):**
+**System status (lightweight — always call first to auth-probe):**
 ```
 GET /api/core/system/status
+```
+```json
+{
+  "metadata": {
+    "system": {
+      "status": 2,
+      "message": "No pending messages",
+      "title": "System"
+    },
+    "subsystems": []
+  }
+}
+```
+Status `2` = healthy. Status `0` = pending reboot. Status `1` = updates available.
+
+**Gateway status:**
+```
+GET /api/routes/gateway/status
+```
+```json
+{
+  "items": [
+    {
+      "name": "WAN_GW",
+      "address": "151.226.144.1",
+      "status": "none",
+      "loss": "~",
+      "delay": "~",
+      "stddev": "~",
+      "monitor": "~",
+      "status_translated": "Online"
+    }
+  ],
+  "status": "ok"
+}
 ```
 
 **Interface statistics:**
 ```
 GET /api/diagnostics/getInterfaceStats
 ```
-Returns JSON with per-interface packet/byte counters, errors, drops.
-
-**Gateway status:**
-```
-GET /api/routes/gateway/status
-```
-Returns array of gateways with `name`, `monitorip`, `status` (online/offline), `delay`, `stddev`, `loss`.
+Returns empty for the `hermes` read-only user (may need specific interface name or higher permissions). Alternative: `GET /api/interfaces/overview` or direct interface endpoint.
 
 ### Pitfalls
 
-- Need valid API credentials. The known `hermes` user password was not found during recon. Expected format: HTTP Basic Auth with key as username and secret as password, or a dedicated API key from System → Access → Users → API key.
-- Default HTTPS certificate is self-signed and expired (19/08/2026), but a valid Let's Encrypt cert is also assigned. Use `-k` for curl or the valid domain cert.
+- **Credentials exist and work.** Found at `~/.hermes/secrets/opnsense-hermes.env` containing `API_KEY` and `API_SECRET`. Format: HTTP Basic Auth with key as username, secret as password.
 - OPNsense has a safety rule: **never run interactive SSH commands** (top/systat etc.) — causes full network outage. This is an API-only integration.
 - The PHP backend can timeout or return 503 under concurrent requests. The `panel-metrics` scraper should serialise OPNsense calls and use a 10s timeout.
+- Some read-only endpoints may return empty for the `hermes` user if permissions don't cover them. Stick to `core/system/status`, `routes/gateway/status`, and traffic stats.
+- Default HTTPS certificate is self-signed and expired (19/08/2026), but a valid Let's Encrypt cert is also assigned. Use `-k` or the valid domain cert.
 
 ---
 
@@ -239,6 +308,6 @@ GET /api/speedtest/latest
 | 🟢 Free (Phase 1) | `node_exporter` on pve-nas host | `apt install`, static binary | CPU, mem, load, uptime, host temps | Localhost bound |
 | 🟢 Free (Phase 2) | Uptime-Kuma `/metrics` | One HTTP call | 80-monitor status, cert health, response times | HTTP Basic `:<api_key>` |
 | 🟢 Free (Phase 3) | Home Assistant API | One HTTP call | Speedtest (already exists), Hypervolt EV state, any HA sensor | Bearer token |
-| 🟡 Needs setup | TrueNAS API | Setup + one HTTP call | Pool health, disk temps, capacity | Basic auth or API key |
-| 🟡 Needs creds | OPNsense API | Setup + one HTTP call | Firewall throughput, VPN status, gateway health | API key/secret |
+| 🟢 Ready (Phase 2) | TrueNAS API | Bearer token in `secrets/` | Pool health, disk temps, capacity | Bearer token `~/.hermes/secrets/truenas-readonly.key` |
+| 🟢 Ready (Phase 3) | OPNsense API | API key+secret in `secrets/` | Firewall throughput, VPN status, gateway health | HTTP Basic `key:secret` from `~/.hermes/secrets/opnsense-hermes.env` |
 | 🔴 Skip | Speedtest-Tracker direct | — | Already in HA sensors | Use HA instead |
