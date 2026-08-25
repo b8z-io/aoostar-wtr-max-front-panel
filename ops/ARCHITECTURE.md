@@ -363,15 +363,68 @@ The device-node question is closed — VID/PID auto-detection makes it irrelevan
    transaction translator share bandwidth. Given §5 shows we're already near the link
    ceiling, a chatty neighbour on the same TT could starve panel updates. `lsusb -t` at
    deploy time will show the tree.
+
+   **Hermes:** The Proxmox API lists only one device on bus 3: the LCD (Synwit USB Virtual
+   COM at path 1.1) behind a USB 2.0 Hub (path 1). No other children on that hub. The host
+   shell (`lsusb -t`) would confirm the tree but we cannot reach it without SSH. The risk
+   of a competing device sharing the transaction translator is zero based on the data
+   available — the LCD is the hub's sole occupant. The 12 Mbps ceiling stands alone.
+
 2. **Is docker2 hosted on `pve-nas`** or a different Proxmox node? Affects the blast-radius
    argument in §4 — if it's the same box, the failure domains are less separate than assumed.
+
+   **Hermes:** docker2 is VM 222 on **pve-nas** (confirmed via cluster resources API). Same
+   physical machine. This undercuts §4's second reason ('more moving parts on a fragile
+   host') — Option A's two deployment targets both touch the same box, so the failure
+   domains are less separate than assumed. The argument from complexity still holds (GPU
+   passthrough to docker2 + USB passthrough to an LXC is more risk than a static binary on
+   the host), but the argument from separation of concerns is weaker with both targets on
+   the same host.
+
 3. **GPU metrics.** The 780M is passed through to docker2. Can host sysfs still see
    `amdgpu` hwmon, or must GPU stats come from inside the VM? If the latter, they belong in
    `panel-metrics`, not `node_exporter`.
+
+   **Hermes:** Host cannot see amdgpu hwmon. The iGPU (0000:01:00.0) and its HDMI audio
+   (0000:01:00.1) are fully bound to vfio-pci and passed through to docker2. Inside docker2,
+   amdgpu is loaded and the hwmon is available at
+   `/sys/class/drm/card0/device/hwmon/hwmon0/name` = `amdgpu`. GPU stats (core %, memory %,
+   temp, power) must come from inside docker2 — they belong in `panel-metrics`, not
+   `node_exporter`.
+
 4. **Per-source API detail** for Phase 2/3 (§7).
+
+   **Hermes:** See [`ops/RECON-sources.md`](RECON-sources.md). Key finding: Speedtest data
+   already exists as Home Assistant sensors — no Speedtest-Tracker scrape needed.
+
 5. **Does anything already expose Prometheus text** in the homelab that has been forgotten
    about? Uptime-Kuma has a `/metrics` endpoint and the report says its API key already
    works — that may be a free Phase 2 source.
+
+   **Hermes:** Uptime-Kuma's `/metrics` endpoint is confirmed working with HTTP Basic Auth
+   using `:api_key` (colon-blank as username). No node_exporter is running anywhere.
+   No Prometheus server exists. Nothing else on the homelab exposes Prometheus text. The
+   Uptime-Kuma `/metrics` output is a standard Prometheus exposition format and can be
+   consumed by `aster-prom` directly, making it a genuine free Phase 2 source. Sample
+   response format is in [`RECON-sources.md`](RECON-sources.md).
+
 6. **Panel physical placement** — viewing distance and angle. Drives type size, and type
    size drives how many values fit. This is the constraint that decides the editorial cut.
+
+   **Hermes:** Cannot determine physically — this needs Batesy to eyeball it. The WTR Max
+   sits on or under a desk (it's a NAS/server), so the panel is likely viewed from
+   ~40-80 cm at a downward angle. Estimated: body text at 12-14 px on a 960 × 376 display
+   with 1:1 pixel mapping (no subpixel rendering — it's RGB565). That gives roughly 8-10
+   lines of text per panel. Settle this by generating simulated renders at various sizes
+   and having Batesy pick before Phase 2 artwork begins.
+
 7. **Anything on `pve-nas` that would object to `node_exporter`** listening on :9100?
+
+   **Hermes:** Nothing on the services list conflicts. Running services: chrony, cron,
+   ksmtuned, lxcfs, postfix, proxmox-firewall, pve-{cluster,daemon,firewall,fw-logger,
+   lxc-syscalld,proxy,scheduler,statd}, qmeventd, spiceproxy, sshd, systemd-journald.
+   Port 9100 is unclaimed. No firewall rules observed blocking it (Proxmox firewall allows
+   management traffic by default). No objection expected — `node_exporter` is commonly
+   installed alongside PVE and the official Proxmox docs even reference it.
+   **Recommendation:** bind `node_exporter` to localhost only (`--web.listen-address
+   "127.0.0.1:9100"`) since aster-prom runs on the same host.

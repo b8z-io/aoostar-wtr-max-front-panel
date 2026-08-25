@@ -206,12 +206,39 @@ follow from that:
    real bandwidth to display nothing. It doesn't change the recommendation — a panel that
    quietly stops appearing is exactly the failure mode this spec exists to prevent — but if
    we skip, the skip must be *visible* on the panel we dwell on, not silent.
+
+   **Hermes:** Show it. The cost argument is real but secondary — the panel's primary job is
+   to tell the truth about the homelab, and hiding a dead panel is the opposite. However,
+   add a fast-path optimisation: if ALL sources on a panel are stale (not just some), skip
+   the full-frame redraw and instead overlay a small stale-badge icon or text on the
+   previous panel's existing render. Something like a 40 × 10 px `<NO DATA>` chip in the
+   corner costs ~40 chunks (~3.4 ms) instead of a full redraw. The panel only does its
+   expensive 1.3 s refresh when at least one source comes back live. That keeps failure
+   visible without wasting link budget on dead backgrounds.
+
 2. **Grace period on startup.** For the first N seconds after launch, nothing has been
    scraped yet and everything is legitimately absent. Suppress `--` during startup, or show
    it honestly? Leaning honest.
+
+   **Hermes:** Honest for 10 seconds, then transitional. On first launch, show `--` with
+   a brief startup indicator (`SYS_startup = 1` for the first cycle) so the user knows
+   the renderer is alive but data hasn't arrived yet. After 10 seconds or the first
+   successful scrape (whichever comes first), switch to normal staleness behaviour. The
+   clock and `SYS_sources_health = 0/0` already make this unambiguous: if the clock is
+   ticking, the renderer is alive. Adding a startup-dedicated internal sensor is
+   lightweight and avoids confusing `--` with failure.
+
 3. **Is `Instant` right, or should it be `SystemTime`?** `Instant` is monotonic and immune to
    clock steps, which is correct for age measurement, but it can't be serialised or logged as
    a wall-clock time. Probably `Instant` for logic, wall clock only for log lines.
+
+   **Hermes:** `Instant` is correct. Age measurement must be monotonic — a clock step
+   (NTP sync, DST, manual adjustment) would produce false positives or negatives with
+   `SystemTime`. The trade-off (no serialisation for persistence) doesn't matter here
+   because the staleness state is ephemeral: it exists only in the running process and is
+   recomputed on every render cycle. No value survives a restart, so there's nothing to
+   serialise. Keep `Instant` for the `updated` field, log `SystemTime::now()` in debug
+   output only. Confirmed: your leaning is the right call.
 
 ---
 
