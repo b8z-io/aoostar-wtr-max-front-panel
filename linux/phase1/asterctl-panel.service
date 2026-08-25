@@ -1,0 +1,69 @@
+# Phase 1 renderer: draws the host panel on the front LCD.
+#
+# Deliberately Wants= rather than Requires= on the sensor provider. If the
+# provider dies, the panel must keep rendering — showing "--" placeholders and
+# a ticking clock — because a blank screen and a screen full of stale numbers
+# are both worse than a screen that admits it has no data.
+
+[Unit]
+Description=AOOSTAR front panel renderer
+After=local-fs.target aster-sysinfo-host.service
+Wants=aster-sysinfo-host.service
+
+[Service]
+Type=exec
+DynamicUser=true
+# Debian-flavoured: RW access to /dev/ttyACM0. Adapt for other distributions.
+Group=dialout
+
+ExecStart=/opt/asterctl/bin/asterctl \
+    --config /opt/asterctl/cfg/phase1.json \
+    --config-dir /opt/asterctl/cfg \
+    --font-dir /opt/asterctl/fonts \
+    --panels /opt/asterctl/panels/phase1-host \
+    --sensor-path /run/asterctl/sensors \
+    --max-age 10
+
+# The frame cache lives in this process, so every restart costs a full-frame
+# redraw of roughly 1.3s over a 12 Mbps link. Do not restart tightly.
+Restart=on-failure
+RestartSec=10
+
+# Leave the display dark rather than frozen on a stale frame when we stop.
+ExecStopPost=-/opt/asterctl/bin/asterctl --off
+
+# START lock down
+CapabilityBoundingSet=
+LockPersonality=true
+RestrictNamespaces=true
+ProtectHome=true
+ProtectSystem=strict
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+MemoryDenyWriteExecute=true
+RestrictSUIDSGID=true
+KeyringMode=private
+ProtectClock=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictRealtime=true
+# Phase 1 needs no network at all. Revisit when aster-prom joins in Phase 2 —
+# that runs as its own unit, so this one stays isolated.
+PrivateNetwork=true
+PrivateTmp=true
+PrivateUsers=true
+ProtectHostname=true
+RestrictAddressFamilies=none
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+UMask=0177
+# END lock down
+
+DeviceAllow=/dev/ttyACM0 rw
+
+[Install]
+WantedBy=multi-user.target

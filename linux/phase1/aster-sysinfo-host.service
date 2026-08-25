@@ -1,0 +1,62 @@
+# Phase 1 sensor provider: host vitals for the front panel.
+#
+# Writes /run/asterctl/sensors/host.txt every 3 seconds. The file stem is the
+# source name asterctl ages values against, so renaming it means updating
+# max-age.cfg to match.
+#
+# /run is tmpfs, so the whole pipeline touches no persistent storage.
+
+[Unit]
+Description=Host sensor values for the AOOSTAR front panel
+After=local-fs.target
+
+[Service]
+Type=exec
+DynamicUser=true
+
+# Owns the shared runtime directory. Preserved across restarts so the reader
+# does not lose the directory out from under it when this unit is bounced.
+RuntimeDirectory=asterctl
+RuntimeDirectoryPreserve=yes
+
+# --temp-dir must be on the same filesystem as --out: the write is an atomic
+# rename, which cannot cross filesystems.
+ExecStart=/opt/asterctl/bin/aster-sysinfo \
+    --out /run/asterctl/sensors/host.txt \
+    --temp-dir /run/asterctl \
+    --refresh 3
+
+Restart=on-failure
+RestartSec=5
+
+# Sensor files must be readable by the renderer, which runs as a different
+# dynamic user.
+UMask=002
+
+# START lock down
+CapabilityBoundingSet=
+LockPersonality=true
+RestrictNamespaces=true
+ProtectHome=true
+ProtectSystem=strict
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+MemoryDenyWriteExecute=true
+RestrictSUIDSGID=true
+KeyringMode=private
+ProtectClock=true
+RestrictRealtime=true
+PrivateTmp=true
+PrivateUsers=true
+ProtectHostname=true
+RestrictAddressFamilies=none
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+# END lock down
+
+[Install]
+WantedBy=multi-user.target
