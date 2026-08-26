@@ -106,8 +106,17 @@ fn parse_labels(text: &str) -> Vec<(&str, String)> {
 }
 
 /// Turn Kuma's per-monitor samples into the counts a panel can display.
-fn aggregate(text: &str) -> Vec<Metric> {
+///
+/// Returns `None` when the response contains nothing recognisable as Kuma metrics. That is
+/// a failure, not a result: reporting "0 monitors, 0 up, 0 down" from an unparseable
+/// response is a confident lie, and it renders on the panel as a plausible three zeros
+/// rather than as the absence of data it actually is.
+fn aggregate(text: &str) -> Option<Vec<Metric>> {
     let samples = parse(text);
+    if !samples.iter().any(|s| s.name.starts_with("uptime_kuma")) {
+        return None;
+    }
+
     let statuses: Vec<&Sample> = samples
         .iter()
         .filter(|s| s.name == "uptime_kuma_monitor_status" || s.name == "uptime_kuma_status")
@@ -138,7 +147,7 @@ fn aggregate(text: &str) -> Vec<Metric> {
         );
     }
 
-    metrics
+    Some(metrics)
 }
 
 pub async fn scrape(cfg: &Kuma) -> Result<Vec<Metric>> {
@@ -155,7 +164,18 @@ pub async fn scrape(cfg: &Kuma) -> Result<Vec<Metric>> {
         anyhow::bail!("Uptime-Kuma returned {}", response.status());
     }
 
-    Ok(aggregate(&response.text().await?))
+    let text = response.text().await?;
+    aggregate(&text).with_context(|| {
+        // Kuma answers 200 with its dashboard HTML on any path that is not /metrics, so a
+        // wrong URL looks like a healthy scrape returning nothing. Say so plainly, and
+        // include enough of the body to tell HTML from an empty response.
+        let excerpt: String = text.chars().take(60).collect();
+        format!(
+            "Response contained no uptime_kuma metrics ({} bytes, starts: {excerpt:?}). \
+             Check the URL ends in /metrics",
+            text.len()
+        )
+    })
 }
 
 #[cfg(test)]
@@ -177,6 +197,10 @@ uptime_kuma_certificate_valid{monitor_name="traefik"} 1 1690387200000
 uptime_kuma_certificate_valid{monitor_name="mail"} 0 1690387200000
 "#;
 
+    fn agg(text: &str) -> Vec<Metric> {
+        aggregate(text).expect("should recognise Kuma metrics")
+    }
+
     fn value(metrics: &[Metric], name: &str) -> f64 {
         metrics
             .iter()
@@ -187,7 +211,7 @@ uptime_kuma_certificate_valid{monitor_name="mail"} 0 1690387200000
 
     #[test]
     fn monitors_are_counted() {
-        let m = aggregate(SAMPLE);
+        let m = agg(SAMPLE);
         assert_eq!(value(&m, "kuma_monitors_total"), 4.0);
         assert_eq!(value(&m, "kuma_monitors_up"), 2.0);
         assert_eq!(value(&m, "kuma_monitors_down"), 2.0);
@@ -197,14 +221,14 @@ uptime_kuma_certificate_valid{monitor_name="mail"} 0 1690387200000
     /// report a broken service as healthy.
     #[test]
     fn only_status_one_counts_as_up() {
-        let m = aggregate(r#"uptime_kuma_monitor_status{monitor_name="a"} 2"#);
+        let m = agg(r#"uptime_kuma_monitor_status{monitor_name="a"} 2"#);
         assert_eq!(value(&m, "kuma_monitors_up"), 0.0);
         assert_eq!(value(&m, "kuma_monitors_down"), 1.0);
     }
 
     #[test]
     fn up_and_down_always_sum_to_total() {
-        let m = aggregate(SAMPLE);
+        let m = agg(SAMPLE);
         assert_eq!(
             value(&m, "kuma_monitors_up") + value(&m, "kuma_monitors_down"),
             value(&m, "kuma_monitors_total")
@@ -213,20 +237,41 @@ uptime_kuma_certificate_valid{monitor_name="mail"} 0 1690387200000
 
     #[test]
     fn invalid_certificates_are_counted() {
-        assert_eq!(value(&aggregate(SAMPLE), "kuma_certificates_invalid"), 1.0);
+        assert_eq!(value(&agg(SAMPLE), "kuma_certificates_invalid"), 1.0);
     }
 
     #[test]
     fn the_certificate_metric_is_omitted_when_kuma_reports_none() {
-        let m = aggregate(r#"uptime_kuma_monitor_status{monitor_name="a"} 1"#);
+        let m = agg(r#"uptime_kuma_monitor_status{monitor_name="a"} 1"#);
         assert!(!m.iter().any(|m| m.name == "kuma_certificates_invalid"));
     }
 
+    /// Reporting "0 monitors, 0 up" from a response that is not Kuma metrics at all would
+    /// render as three plausible zeros on the panel. It has to fail instead.
     #[test]
-    fn an_empty_response_yields_zero_rather_than_failing() {
-        let m = aggregate("");
+    fn an_empty_response_is_a_failure_not_a_count_of_zero() {
+        assert!(aggregate("").is_none());
+    }
+
+    /// Kuma serves its dashboard with HTTP 200 on any path that is not /metrics, so a
+    /// mistyped URL arrives here as a perfectly successful scrape of HTML.
+    #[test]
+    fn a_dashboard_html_response_is_a_failure() {
+        assert!(aggregate("<!doctype html><html><body>Uptime Kuma</body></html>").is_none());
+    }
+
+    #[test]
+    fn a_response_with_only_other_metrics_is_a_failure() {
+        assert!(aggregate("process_cpu_seconds_total 1.5\nnodejs_version_info 1\n").is_none());
+    }
+
+    /// A monitor list that is genuinely empty still counts as a working scrape, so long as
+    /// Kuma said something about itself.
+    #[test]
+    fn a_real_kuma_response_with_no_monitors_still_counts() {
+        let m = aggregate(r#"uptime_kuma_certificate_valid{monitor_name="a"} 1"#)
+            .expect("recognisably Kuma");
         assert_eq!(value(&m, "kuma_monitors_total"), 0.0);
-        assert_eq!(value(&m, "kuma_monitors_up"), 0.0);
     }
 
     #[test]
