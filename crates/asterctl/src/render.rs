@@ -20,6 +20,37 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 
+/// Translate an image, filling the exposed edge from the source's corner pixel.
+///
+/// Sampling the corner rather than using a fixed colour keeps the fill consistent with
+/// whatever background the panel uses, so the shift shows up as a slightly wider border on
+/// one side rather than a visible band.
+pub fn shift_image(src: &RgbaImage, (dx, dy): (i32, i32)) -> RgbaImage {
+    let (w, h) = src.dimensions();
+    if (dx, dy) == (0, 0) || w == 0 || h == 0 {
+        return src.clone();
+    }
+
+    let fill = *src.get_pixel(0, 0);
+    let mut out = RgbaImage::from_pixel(w, h, fill);
+
+    for y in 0..h as i32 {
+        let sy = y - dy;
+        if sy < 0 || sy >= h as i32 {
+            continue;
+        }
+        for x in 0..w as i32 {
+            let sx = x - dx;
+            if sx < 0 || sx >= w as i32 {
+                continue;
+            }
+            out.put_pixel(x as u32, y as u32, *src.get_pixel(sx as u32, sy as u32));
+        }
+    }
+
+    out
+}
+
 /// Error type for image processing operations
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -52,6 +83,8 @@ pub struct PanelRenderer {
     save_progress_layer: bool,
     img_save_path: PathBuf,
     img_suffix: Option<String>,
+    /// Whole-panel offset, to spread pixel wear. See [`crate::scrub::PixelShift`].
+    pixel_shift: (i32, i32),
 }
 
 impl PanelRenderer {
@@ -75,6 +108,7 @@ impl PanelRenderer {
             save_progress_layer: false,
             img_save_path: PathBuf::from("out"),
             img_suffix: None,
+            pixel_shift: (0, 0),
         }
     }
 
@@ -100,6 +134,15 @@ impl PanelRenderer {
         self.img_save_path = img_dir.into();
         self.create_img_save_path();
     }
+    /// Offset the whole rendered panel by the given number of pixels.
+    ///
+    /// Used to spread pixel wear so no element occupies exactly the same pixels
+    /// indefinitely. Exposed edges are filled from the background's corner colour, so a
+    /// small offset reads as the border being marginally wider on one side.
+    pub fn set_pixel_shift(&mut self, offset: (i32, i32)) {
+        self.pixel_shift = offset;
+    }
+
     /// Set an optional image name suffix for saving a .PNG graphic file.
     ///
     /// This function needs to be called before [render()] if a different suffix should be used for each rendered panel.
@@ -138,7 +181,11 @@ impl PanelRenderer {
         };
         self.composite_layer_map.clear();
 
-        let final_image = self.render_all_sensors(panel, values, now, background)?;
+        let mut final_image = self.render_all_sensors(panel, values, now, background)?;
+
+        if self.pixel_shift != (0, 0) {
+            final_image = shift_image(&final_image, self.pixel_shift);
+        }
 
         debug!("Rendered panel in {}ms", now.elapsed().as_millis());
 
@@ -779,5 +826,56 @@ impl PanelRenderer {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod shift_tests {
+    use super::shift_image;
+    use image::{Rgba, RgbaImage};
+
+    fn probe() -> RgbaImage {
+        let mut img = RgbaImage::from_pixel(8, 6, Rgba([10, 10, 10, 255]));
+        img.put_pixel(4, 3, Rgba([200, 100, 50, 255]));
+        img
+    }
+
+    #[test]
+    fn a_zero_offset_is_a_passthrough() {
+        let img = probe();
+        assert_eq!(shift_image(&img, (0, 0)).as_raw(), img.as_raw());
+    }
+
+    #[test]
+    fn content_moves_by_the_offset() {
+        let shifted = shift_image(&probe(), (2, 1));
+        assert_eq!(*shifted.get_pixel(6, 4), Rgba([200, 100, 50, 255]));
+    }
+
+    #[test]
+    fn negative_offsets_move_the_other_way() {
+        let shifted = shift_image(&probe(), (-1, -2));
+        assert_eq!(*shifted.get_pixel(3, 1), Rgba([200, 100, 50, 255]));
+    }
+
+    #[test]
+    fn exposed_edges_take_the_corner_colour() {
+        let shifted = shift_image(&probe(), (2, 1));
+        assert_eq!(
+            *shifted.get_pixel(0, 0),
+            Rgba([10, 10, 10, 255]),
+            "the fill should match the background, not appear as a band"
+        );
+    }
+
+    #[test]
+    fn dimensions_are_preserved() {
+        assert_eq!(shift_image(&probe(), (3, 2)).dimensions(), (8, 6));
+    }
+
+    #[test]
+    fn an_offset_larger_than_the_image_leaves_only_fill() {
+        let shifted = shift_image(&probe(), (99, 99));
+        assert!(shifted.pixels().all(|p| *p == Rgba([10, 10, 10, 255])));
     }
 }

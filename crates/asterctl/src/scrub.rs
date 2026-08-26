@@ -93,7 +93,7 @@ impl ScrubSequence {
     /// exercises the extremes but never the individual colour channels or the noise pass —
     /// so callers should stop only on a boundary.
     pub fn at_cycle_start(&self) -> bool {
-        self.index % CYCLE.len() == 0
+        self.index.is_multiple_of(CYCLE.len())
     }
 
     /// Number of frames in one complete cycle.
@@ -123,6 +123,61 @@ impl Iterator for ScrubSequence {
         };
 
         Some(img)
+    }
+}
+
+/// Successive small offsets for the whole rendered panel.
+///
+/// The scrub treats retention that has already happened. This prevents our own layout from
+/// creating more of it: a tile edge or a digit that sits on exactly the same pixels for
+/// years will eventually etch itself in, however good the conditioning cycle is. Moving the
+/// image by a pixel or two spreads that wear over a small neighbourhood instead.
+///
+/// The offsets walk a ring rather than jumping randomly, so successive positions are
+/// adjacent and the movement is imperceptible in normal viewing.
+///
+/// # Cost
+///
+/// Shifting changes every chunk, so it costs a full frame. Advancing the offset at the same
+/// moment as a scrub makes it free: the post-scrub frame is a full redraw regardless.
+pub struct PixelShift {
+    max: i32,
+    index: usize,
+}
+
+/// Unit ring, scaled by the configured maximum.
+const RING: [(i32, i32); 8] = [
+    (1, 0),
+    (1, 1),
+    (0, 1),
+    (-1, 1),
+    (-1, 0),
+    (-1, -1),
+    (0, -1),
+    (1, -1),
+];
+
+impl PixelShift {
+    pub fn new(max: i32) -> Self {
+        Self {
+            max: max.max(0),
+            index: 0,
+        }
+    }
+
+    /// Advance to the next position and return it.
+    pub fn advance(&mut self) -> (i32, i32) {
+        if self.max == 0 {
+            return (0, 0);
+        }
+        let (dx, dy) = RING[self.index % RING.len()];
+        self.index = self.index.wrapping_add(1);
+        (dx * self.max, dy * self.max)
+    }
+
+    /// Number of distinct positions before the pattern repeats.
+    pub fn positions() -> usize {
+        RING.len()
     }
 }
 
@@ -224,6 +279,46 @@ mod tests {
             seq.next();
         }
         assert_eq!(seq.peek_kind(), CYCLE[0], "cycle should wrap around");
+    }
+
+    #[test]
+    fn pixel_shift_stays_within_bounds() {
+        let mut shift = PixelShift::new(2);
+        for _ in 0..PixelShift::positions() * 3 {
+            let (dx, dy) = shift.advance();
+            assert!(
+                dx.abs() <= 2 && dy.abs() <= 2,
+                "offset {dx},{dy} out of bounds"
+            );
+        }
+    }
+
+    #[test]
+    fn pixel_shift_visits_every_position_before_repeating() {
+        let mut shift = PixelShift::new(1);
+        let seen: std::collections::HashSet<_> = (0..PixelShift::positions())
+            .map(|_| shift.advance())
+            .collect();
+        assert_eq!(seen.len(), PixelShift::positions());
+    }
+
+    #[test]
+    fn pixel_shift_moves_to_an_adjacent_position() {
+        let mut shift = PixelShift::new(1);
+        let mut prev = shift.advance();
+        for _ in 0..PixelShift::positions() {
+            let next = shift.advance();
+            let step = (next.0 - prev.0).abs().max((next.1 - prev.1).abs());
+            assert!(step <= 1, "jumped from {prev:?} to {next:?}");
+            prev = next;
+        }
+    }
+
+    #[test]
+    fn a_zero_maximum_disables_the_shift() {
+        let mut shift = PixelShift::new(0);
+        assert_eq!(shift.advance(), (0, 0));
+        assert_eq!(shift.advance(), (0, 0));
     }
 
     #[test]

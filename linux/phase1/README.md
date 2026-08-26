@@ -81,6 +81,15 @@ To disable, drop the flag. To watch one:
 journalctl -u asterctl-panel -f | grep -i scrub
 ```
 
+`--pixel-shift 2` moves the whole panel by up to two pixels on the same schedule. The
+scrub treats retention that has already happened; the shift stops the layout creating
+more, because a tile edge sitting on exactly the same pixels for years will etch itself
+in however good the conditioning is. It is timed to the scrub deliberately — the frame
+after a scrub is a full redraw regardless, so the shift costs nothing.
+
+Two pixels is imperceptible against a 16px margin. It has no effect without
+`--scrub-interval`, which is what schedules it.
+
 Existing retention usually fades over days once varied content is displayed. If it has
 not improved after a week of scrubbing, the remaining option is a lighter background,
 which hides a ghost better than a dark one does.

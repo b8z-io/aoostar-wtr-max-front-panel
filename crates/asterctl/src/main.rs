@@ -6,7 +6,7 @@
 
 use asterctl::cfg::{MonitorConfig, Panel, load_custom_panel};
 use asterctl::render::PanelRenderer;
-use asterctl::scrub::{DEFAULT_SCRUB_DURATION, ScrubSequence};
+use asterctl::scrub::{DEFAULT_SCRUB_DURATION, PixelShift, ScrubSequence};
 use asterctl::sensors::{SensorFilter, read_filter_file, read_key_value_file, start_file_slurper};
 use asterctl::store::{SensorStore, StalenessConfig, parse_max_age_entries};
 use asterctl::{cfg, img};
@@ -112,6 +112,20 @@ struct Args {
     #[arg(long)]
     scrub_duration: Option<u64>,
 
+    /// Offset the whole panel by up to N pixels, moving on each maintenance cycle.
+    ///
+    /// The scrub treats retention that has already happened; this prevents the layout from
+    /// creating more. A tile edge that sits on exactly the same pixels for years etches
+    /// itself in however good the conditioning is — moving by a pixel or two spreads that
+    /// wear over a neighbourhood.
+    ///
+    /// Timed by `--scrub-interval`, so with both enabled the shift is free: the frame after
+    /// a scrub is a full redraw regardless. Requires `--scrub-interval` to be set.
+    ///
+    /// 1 or 2 is plenty. Larger values become visible as the panel moving.
+    #[arg(long)]
+    pixel_shift: Option<i32>,
+
     /// Switch off display n seconds after loading image or running demo.
     #[arg(short, long)]
     off_after: Option<u32>,
@@ -178,15 +192,21 @@ fn main() -> anyhow::Result<()> {
         run_sensor_panel(
             &mut screen,
             cfg,
-            cfg_dir,
-            font_dir,
-            sensor_path,
-            img_save_path,
+            PanelPaths {
+                config_dir: cfg_dir,
+                font_dir,
+                sensor_path,
+                img_save_path,
+            },
             staleness,
-            args.scrub_interval.map(|m| Duration::from_secs(m * 60)),
-            args.scrub_duration
-                .map(Duration::from_secs)
-                .unwrap_or(DEFAULT_SCRUB_DURATION),
+            Maintenance {
+                interval: args.scrub_interval.map(|m| Duration::from_secs(m * 60)),
+                scrub_duration: args
+                    .scrub_duration
+                    .map(Duration::from_secs)
+                    .unwrap_or(DEFAULT_SCRUB_DURATION),
+                pixel_shift_max: args.pixel_shift.unwrap_or(0),
+            },
         )?;
         return Ok(());
     }
@@ -305,20 +325,44 @@ fn load_sensor_filter(mapping_cfg: &Path) -> anyhow::Result<Option<SensorFilter>
     Ok(None)
 }
 
-fn run_sensor_panel<B: Into<PathBuf>>(
+/// Directories the sensor panel reads from, and where to save debug renders.
+struct PanelPaths {
+    /// Configuration files and background images.
+    config_dir: PathBuf,
+    /// TTF fonts referenced by panel definitions.
+    font_dir: PathBuf,
+    /// Sensor value file, or a directory of them.
+    sensor_path: PathBuf,
+    /// Debug only: where to write rendered PNGs.
+    img_save_path: Option<PathBuf>,
+}
+
+/// Display upkeep that runs between panels rather than as part of rendering.
+///
+/// The two measures share a schedule on purpose: a scrub ends with a full-frame redraw, so
+/// advancing the pixel offset at the same moment costs nothing extra.
+struct Maintenance {
+    /// How often to run upkeep. `None` disables both measures.
+    interval: Option<Duration>,
+    /// Minimum time each conditioning scrub runs for.
+    scrub_duration: Duration,
+    /// Maximum whole-panel offset in pixels. Zero disables the shift.
+    pixel_shift_max: i32,
+}
+
+fn run_sensor_panel(
     screen: &mut AooScreen,
     mut cfg: MonitorConfig,
-    config_dir: B,
-    font_dir: B,
-    sensor_path: B,
-    img_save_path: Option<B>,
+    paths: PanelPaths,
     staleness: StalenessConfig,
-    scrub_interval: Option<Duration>,
-    scrub_duration: Duration,
+    maintenance: Maintenance,
 ) -> anyhow::Result<()> {
-    let font_dir = font_dir.into();
-    let config_dir = config_dir.into();
-    let img_save_path = img_save_path.map(|p| p.into());
+    let PanelPaths {
+        config_dir,
+        font_dir,
+        sensor_path,
+        img_save_path,
+    } = paths;
 
     let mut renderer = PanelRenderer::new(DISPLAY_SIZE, &font_dir, &config_dir);
     if let Some(img_save_path) = &img_save_path {
@@ -347,28 +391,47 @@ fn run_sensor_panel<B: Into<PathBuf>>(
         .map(|v| Duration::from_millis((v * 1000.0) as u64))
         .unwrap_or(Duration::from_secs(5));
 
-    if let Some(interval) = scrub_interval {
+    if let Some(interval) = maintenance.interval {
         info!(
             "Retention scrub enabled: {}s every {}min",
-            scrub_duration.as_secs(),
+            maintenance.scrub_duration.as_secs(),
             interval.as_secs() / 60
         );
     }
+    if maintenance.pixel_shift_max > 0 {
+        if maintenance.interval.is_some() {
+            info!(
+                "Pixel shift enabled: up to {}px per maintenance cycle",
+                maintenance.pixel_shift_max
+            );
+        } else {
+            warn!("--pixel-shift needs --scrub-interval to schedule it; the panel will not move");
+        }
+    }
     let mut last_scrub = Instant::now();
     let mut scrub_seed: u32 = 0x1234_5678;
+    let mut pixel_shift = PixelShift::new(maintenance.pixel_shift_max);
 
     // panel switching loop
     loop {
         // Between panels, never mid-panel: a scrub blanks the screen, and interrupting a
         // panel to do it would look like a fault rather than maintenance.
-        if let Some(interval) = scrub_interval
+        if let Some(interval) = maintenance.interval
             && last_scrub.elapsed() >= interval
         {
             scrub_seed = scrub_seed
                 .wrapping_mul(1_664_525)
                 .wrapping_add(1_013_904_223);
-            run_scrub(screen, scrub_duration, scrub_seed)?;
+            run_scrub(screen, maintenance.scrub_duration, scrub_seed)?;
             last_scrub = Instant::now();
+
+            // Advance after the scrub, not before: the next panel render is a full frame
+            // either way, so moving the panel here costs nothing.
+            if maintenance.pixel_shift_max > 0 {
+                let offset = pixel_shift.advance();
+                debug!("Pixel shift now {offset:?}");
+                renderer.set_pixel_shift(offset);
+            }
         }
 
         let panel = cfg
