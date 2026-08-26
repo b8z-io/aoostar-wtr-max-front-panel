@@ -1,19 +1,23 @@
 # RECON — Data source reconnaissance for Phase 2/3
 
-> ## ⚠️ Security note — credential rotation required
+> ## Security note — a leaked key, and the decision taken on it
 >
-> A live Uptime-Kuma API key was committed to this file in `5606d65` and pushed. **This
-> repository is a public fork, so that key was publicly readable.** It has been redacted from
-> the current revision, but it remains in git history and must be treated as compromised.
+> A live Uptime-Kuma API key was committed to this file in `5606d65` and pushed. This
+> repository is a public fork, so that key was publicly readable. It was redacted in a later
+> revision, but redaction is not removal: it remains in git history and should be assumed
+> harvested.
 >
-> **Required: revoke and reissue the key in Uptime-Kuma.** Redaction is not a fix — assume
-> anything pushed to a public repo has been harvested. Rewriting history is optional hygiene
-> once the key is dead; rotation is the actual remedy.
+> **Decision: not rotated.** Batesy assessed the risk as low and chose to leave it. Uptime-Kuma
+> is LAN-only, so the key is inert without access to the network — a defensible call, and it
+> is a settled decision rather than outstanding work. **Stop reporting it as pending.**
 >
-> **Convention from here on: this file records where a credential lives, never its value.**
-> `~/.hermes/secrets/<name>` is the right level of detail. The same applies to any panel or
-> scraper config that ends up in the repo — read secrets from the environment or a file
-> outside the tree.
+> The convention it produced is the part that matters:
+>
+> **This file records where a credential lives, never its value.** `~/.hermes/secrets/<name>`
+> is the right level of detail. The same goes for anything else that lands in the repo —
+> `panel-metrics` takes credential *paths* in its config for exactly this reason, and its
+> compose file mounts secrets read-only rather than passing them as environment variables,
+> which would put them in `docker inspect` output.
 
 
 > Queried 2026-08-25 via SSH to docker2 (hermes-bot@100.96.97.65) and Home Assistant API.
