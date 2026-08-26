@@ -105,6 +105,33 @@ fn parse_labels(text: &str) -> Vec<(&str, String)> {
     labels
 }
 
+/// Metric names differ between Uptime-Kuma major versions.
+///
+/// v1 prefixes everything `uptime_kuma_`; v2 dropped that in favour of a bare `monitor_`.
+/// Both are accepted rather than picking the one currently deployed: the recorded samples in
+/// ops/RECON-sources.md are v1-shaped while the live instance is v2.5.3, and hardcoding
+/// either would move the breakage rather than remove it.
+const STATUS_NAMES: [&str; 3] = [
+    "uptime_kuma_monitor_status",
+    "uptime_kuma_status",
+    "monitor_status",
+];
+
+const CERT_VALID_NAMES: [&str; 2] = ["uptime_kuma_certificate_valid", "monitor_cert_is_valid"];
+
+const CERT_DAYS_NAMES: [&str; 2] = [
+    "uptime_kuma_certificate_days_remaining",
+    "monitor_cert_days_remaining",
+];
+
+/// Whether a metric name looks like it came from Uptime-Kuma, in either version's dialect.
+///
+/// Used to tell a real response from a wrong URL — Kuma serves its dashboard with HTTP 200
+/// on any other path, and counting zero samples from HTML would report a confident nothing.
+fn is_kuma_metric(name: &str) -> bool {
+    name.starts_with("uptime_kuma") || name.starts_with("monitor_")
+}
+
 /// Turn Kuma's per-monitor samples into the counts a panel can display.
 ///
 /// Returns `None` when the response contains nothing recognisable as Kuma metrics. That is
@@ -113,13 +140,13 @@ fn parse_labels(text: &str) -> Vec<(&str, String)> {
 /// rather than as the absence of data it actually is.
 fn aggregate(text: &str) -> Option<Vec<Metric>> {
     let samples = parse(text);
-    if !samples.iter().any(|s| s.name.starts_with("uptime_kuma")) {
+    if !samples.iter().any(|s| is_kuma_metric(s.name)) {
         return None;
     }
 
     let statuses: Vec<&Sample> = samples
         .iter()
-        .filter(|s| s.name == "uptime_kuma_monitor_status" || s.name == "uptime_kuma_status")
+        .filter(|s| STATUS_NAMES.contains(&s.name))
         .collect();
 
     let total = statuses.len() as f64;
@@ -137,13 +164,28 @@ fn aggregate(text: &str) -> Option<Vec<Metric>> {
     // only when Kuma reports any.
     let certs: Vec<&Sample> = samples
         .iter()
-        .filter(|s| s.name == "uptime_kuma_certificate_valid")
+        .filter(|s| CERT_VALID_NAMES.contains(&s.name))
         .collect();
     if !certs.is_empty() {
         let expiring = certs.iter().filter(|s| s.value != 1.0).count() as f64;
         metrics.push(
             Metric::new("kuma_certificates_invalid", expiring)
                 .help("Monitored certificates Kuma reports as not valid"),
+        );
+    }
+
+    // Days until the soonest expiry is a far better panel signal than a valid/invalid
+    // boolean: it distinguishes "renew this month" from "the site is already broken",
+    // and only the minimum across monitors matters when the display has one line for it.
+    if let Some(soonest) = samples
+        .iter()
+        .filter(|s| CERT_DAYS_NAMES.contains(&s.name))
+        .map(|s| s.value)
+        .min_by(f64::total_cmp)
+    {
+        metrics.push(
+            Metric::new("kuma_cert_days_min", soonest)
+                .help("Days until the soonest monitored certificate expiry"),
         );
     }
 
@@ -207,6 +249,82 @@ uptime_kuma_certificate_valid{monitor_name="mail"} 0 1690387200000
             .find(|m| m.name == name)
             .unwrap_or_else(|| panic!("{name} should be emitted"))
             .value
+    }
+
+    /// The live instance is Uptime-Kuma v2.5.3, which dropped the `uptime_kuma_` prefix.
+    /// Both dialects have to work: the recorded samples above are v1, this is what is
+    /// actually on the wire.
+    const SAMPLE_V2: &str = r#"
+# HELP monitor_status Monitor Status (1 = UP, 0 = DOWN)
+# TYPE monitor_status gauge
+monitor_status{monitor_name="internet",monitor_type="http"} 1
+monitor_status{monitor_name="opnsense",monitor_type="http"} 1
+monitor_status{monitor_name="traefik",monitor_type="http"} 0
+monitor_status{monitor_name="pending one",monitor_type="http"} 2
+monitor_cert_is_valid{monitor_name="traefik"} 1
+monitor_cert_is_valid{monitor_name="mail"} 0
+monitor_cert_days_remaining{monitor_name="traefik"} 61
+monitor_cert_days_remaining{monitor_name="mail"} 9
+monitor_response_time{monitor_name="internet"} 6
+monitor_uptime_ratio{monitor_name="internet"} 99.8
+"#;
+
+    #[test]
+    fn the_v2_dialect_is_counted_identically() {
+        let v1 = agg(SAMPLE);
+        let v2 = agg(SAMPLE_V2);
+
+        for name in [
+            "kuma_monitors_total",
+            "kuma_monitors_up",
+            "kuma_monitors_down",
+        ] {
+            assert_eq!(value(&v1, name), value(&v2, name), "{name} should match");
+        }
+    }
+
+    #[test]
+    fn v2_certificates_are_counted() {
+        assert_eq!(value(&agg(SAMPLE_V2), "kuma_certificates_invalid"), 1.0);
+    }
+
+    /// Days to the soonest expiry distinguishes "renew this month" from "already broken",
+    /// which a valid/invalid boolean cannot.
+    #[test]
+    fn the_soonest_certificate_expiry_is_reported() {
+        assert_eq!(value(&agg(SAMPLE_V2), "kuma_cert_days_min"), 9.0);
+    }
+
+    #[test]
+    fn the_expiry_metric_is_omitted_when_kuma_reports_none() {
+        let m = agg(r#"monitor_status{monitor_name="a"} 1"#);
+        assert!(!m.iter().any(|m| m.name == "kuma_cert_days_min"));
+    }
+
+    #[test]
+    fn both_dialects_are_recognised_as_kuma() {
+        assert!(is_kuma_metric("uptime_kuma_status"));
+        assert!(is_kuma_metric("monitor_status"));
+        assert!(is_kuma_metric("monitor_cert_days_remaining"));
+    }
+
+    /// The endpoint also serves default Node.js process metrics; those must not be
+    /// mistaken for proof that Kuma answered.
+    #[test]
+    fn node_process_metrics_are_not_mistaken_for_kuma() {
+        assert!(!is_kuma_metric("process_cpu_seconds_total"));
+        assert!(!is_kuma_metric("nodejs_version_info"));
+        assert!(
+            aggregate("process_cpu_seconds_total 1.5\nnodejs_heap_size_used_bytes 4\n").is_none()
+        );
+    }
+
+    #[test]
+    fn a_v2_response_reports_its_real_counts() {
+        let m = agg(SAMPLE_V2);
+        assert_eq!(value(&m, "kuma_monitors_total"), 4.0);
+        assert_eq!(value(&m, "kuma_monitors_up"), 2.0);
+        assert_eq!(value(&m, "kuma_monitors_down"), 2.0);
     }
 
     #[test]

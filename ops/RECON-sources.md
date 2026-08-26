@@ -131,6 +131,26 @@ Single scrape of `/metrics` returns *everything*. ~80 monitors × 4 metrics = ~3
 
 ### Pitfalls
 
+- ⚠️ **Metric names differ by major version, and the sample above is v1.** The live instance
+  is **v2.5.3**, which dropped the `uptime_kuma_` prefix entirely:
+
+  | v1 (as recorded above) | v2.5.3 (what is actually on the wire) |
+  |---|---|
+  | `uptime_kuma_status` | `monitor_status` |
+  | `uptime_kuma_certificate_valid` | `monitor_cert_is_valid` |
+  | `uptime_kuma_response_time` | `monitor_response_time` |
+  | *(not present)* | `monitor_cert_days_remaining` |
+  | *(not present)* | `monitor_uptime_ratio` |
+
+  `panel-metrics` accepts both dialects. Anything else consuming this endpoint needs to know
+  which one it is looking at — a v1 name silently matches nothing rather than erroring.
+
+- The endpoint also serves default Node.js process metrics (`process_*`, `nodejs_*`).
+  Those are not evidence that Kuma itself answered.
+
+- Kuma serves its **dashboard HTML with HTTP 200** on any path that is not `/metrics`, so a
+  URL missing that suffix looks like a successful scrape returning nothing.
+
 - API keys are stored **bcrypt-hashed** in the `api_key` table — no reverse read possible. Key format is `uk<ID>_<secret>` where `<ID>` is the DB row id. The `verifyAPIKey` function parses this format: it extracts the row id from between "uk" and "_", looks up the bcrypt hash, then verifies the `<secret>` portion. Arbitrary keys like `kuma-xxx` will always return 401.
 - *(Resolved: the earlier contradiction — a `SELECT value FROM setting` query returning empty — was because keys live hashed in a different table, not because no key was set. Endpoint confirmed returning HTTP 200 with ~102 KB of Prometheus text across 72 monitors.)*
 - REST management endpoints require Socket.io, not REST. Read-only metrics are fine via `/metrics`.
