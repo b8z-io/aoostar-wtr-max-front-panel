@@ -58,6 +58,13 @@ fn build(info: Option<SystemInfo>, pools: Vec<Pool>) -> Vec<Metric> {
             metrics.push(
                 Metric::new("truenas_uptime_seconds", uptime).help("TrueNAS uptime in seconds"),
             );
+            // Seconds are the truth; days are what a panel can render. 450203 is six
+            // glyphs of noise at a glance, 5.2 is a fact. The division happens here
+            // because nothing downstream of this service performs arithmetic.
+            metrics.push(
+                Metric::new("truenas_uptime_days", uptime / 86_400.0)
+                    .help("TrueNAS uptime in days"),
+            );
         }
         if let Some(load) = info.loadavg.first() {
             metrics.push(Metric::new("truenas_load1", *load).help("TrueNAS 1 minute load average"));
@@ -97,6 +104,18 @@ fn build(info: Option<SystemInfo>, pools: Vec<Pool>) -> Vec<Metric> {
 
     metrics.push(
         Metric::new("truenas_pools_total", pools.len() as f64).help("Pools known to TrueNAS"),
+    );
+    // Emitted as well as the unhealthy count, because the panel renders "5 / 5" and cannot
+    // subtract. Arithmetic belongs here; downstream there is nothing that performs any.
+    metrics.push(
+        Metric::new(
+            "truenas_pools_online",
+            pools
+                .iter()
+                .filter(|p| pool_health(&p.status) >= 1.0)
+                .count() as f64,
+        )
+        .help("Pools reporting ONLINE"),
     );
     metrics.push(
         Metric::new(

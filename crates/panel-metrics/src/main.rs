@@ -21,6 +21,7 @@
 
 mod config;
 mod metrics;
+mod rollup;
 mod sources;
 
 use anyhow::{Context, Result};
@@ -77,6 +78,10 @@ async fn scrape_all(config: &Config) -> Vec<Metric> {
     if let Some(cfg) = &config.hass {
         metrics.extend(sources::collect("hass", sources::hass::scrape(cfg).await));
     }
+
+    // Derived last, from the collected set, so it sees every source's up signal.
+    let summary = rollup::summarise(&metrics);
+    metrics.extend(summary);
 
     metrics
 }
