@@ -56,15 +56,25 @@ HEAD_H = 38
 ROW_H = 62
 ROWS_Y = MARGIN + HEAD_H + 6
 
-# Kuma monitors, in the order they appear. Panel labels are stable names; the
-# real provider keys carry the full Prometheus label set and are resolved by
-# cfg/sensor-mapping.cfg on the host.
+# Kuma monitors, ordered local to external: firewall, proxy, internet, the
+# tunnel that gets you back in, and the agent.
+#
+# (display name, sensor key). The sensor key is a stable name the panel asks
+# for; the real provider keys carry the full Prometheus label set and are
+# resolved by cfg/sensor-mapping.cfg on the host.
+#
+# The display names are deliberately NOT the raw monitor names. Kuma has both
+# "cloudflare" (a ping of 1.1.1.1) and "cloudflared" (the tunnel container),
+# which differ by one character and would sit adjacent on the panel — unreadable
+# at a glance, and the two mean completely different things. Named for what they
+# tell you instead: a 1.1.1.1 ping is an internet-reachability canary, and the
+# cloudflared container is the tunnel.
 MONITORS = [
-    ("INTERNET", "internet"),
     ("OPNSENSE", "opnsense"),
     ("TRAEFIK", "traefik"),
+    ("INTERNET", "cloudflare"),
+    ("TUNNEL", "cloudflared"),
     ("HINDSIGHT", "hindsight"),
-    ("CLOUDFLARE", "cloudflare"),
 ]
 
 COL_NAME_X = 30
