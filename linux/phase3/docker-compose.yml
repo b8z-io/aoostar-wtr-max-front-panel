@@ -1,0 +1,27 @@
+# panel-metrics on docker2.
+#
+# Secrets are mounted read-only from files on the host, never passed as environment
+# variables or build arguments: both end up in `docker inspect` output.
+
+services:
+  panel-metrics:
+    build:
+      context: ../..
+      dockerfile: linux/phase3/Dockerfile
+    container_name: panel-metrics
+    restart: unless-stopped
+    ports:
+      # Reachable from pve-nas, where aster-prom scrapes it.
+      - "9101:9101"
+    volumes:
+      - ./config.toml:/etc/panel-metrics/config.toml:ro
+      - ${HOME}/.hermes/secrets/truenas-readonly.key:/run/secrets/truenas.key:ro
+      - ${HOME}/.hermes/secrets/kuma-panel-metrics.key:/run/secrets/kuma.key:ro
+      - ${HOME}/.hermes/secrets/opnsense-key:/run/secrets/opnsense.id:ro
+      - ${HOME}/.hermes/secrets/opnsense-secret:/run/secrets/opnsense.key:ro
+      - ${HOME}/.hermes/secrets/hass.key:/run/secrets/hass.key:ro
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    cap_drop:
+      - ALL

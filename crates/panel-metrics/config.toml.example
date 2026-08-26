@@ -1,0 +1,49 @@
+# panel-metrics configuration.
+#
+# CREDENTIALS ARE NEVER VALUES IN THIS FILE. Every source names a path to read its
+# secret from. A key written here is a key in a backup, in a paste, and eventually in
+# a repository — this project has already leaked one that way.
+#
+# Omit a source entirely to disable it.
+
+listen = "0.0.0.0:9101"
+
+# How often every source is scraped. The result is cached and served to all callers,
+# so this — not the consumer's poll rate — is what upstream APIs actually see.
+refresh_seconds = 30
+
+[truenas]
+# HTTPS only: port 80 does not answer.
+url = "https://192.168.68.24"
+token_file = "/run/secrets/truenas.key"
+# The API blocks during a ZFS scrub, which is exactly when you want the panel.
+timeout_seconds = 15
+# TrueNAS presents its own certificate.
+accept_invalid_cert = true
+
+[kuma]
+url = "http://192.168.68.22:3001/metrics"
+# Empty username, API key as password. Same key as the Phase 2 scrape.
+token_file = "/run/secrets/kuma.key"
+
+[opnsense]
+url = "https://192.168.68.1"
+# OPNsense splits its credential: key is the basic-auth username, secret the password.
+key_file = "/run/secrets/opnsense.id"
+token_file = "/run/secrets/opnsense.key"
+# PHP backend, 50-200ms per call, and 503s under concurrency. Requests are serialised.
+timeout_seconds = 10
+# Default certificate is self-signed and expired.
+accept_invalid_cert = true
+
+[hass]
+url = "http://192.168.68.23:8123"
+token_file = "/run/secrets/hass.key"
+# Named explicitly rather than bulk-fetched: entity IDs are not guessable, and naming
+# them makes a rename show up as a metric that stopped being emitted.
+entities = [
+    "sensor.speedtest_tracker_download",
+    "sensor.speedtest_tracker_upload",
+    "sensor.speedtest_tracker_ping",
+    "sensor.hypervolt_session_energy",
+]
