@@ -107,16 +107,24 @@ The renderer should now cycle `phase1-host` → `phase2-services` → `phase3-ho
 
 ## Rotation cost
 
-Three panels at a 30s dwell is a 90s cycle. Each switch changes the background, so it
-costs a near-full frame — about 1.3s on this 12 Mbps link, or roughly 4% of it. Adding
+Three panels at a 10s dwell is a 30s cycle. Each switch changes the background, so it
+costs a near-full frame — about 1.3s on this 12 Mbps link, or roughly 13% of it. Adding
 the third panel does not change that percentage: the cost is per switch, and switches
-still happen every 30s regardless of how many panels are in the rotation.
+happen every 10s regardless of how many panels are in the rotation.
 
-What it does change is how long you wait to see a given panel. 90s is a long time to wait
-for the one number that says whether anything is wrong. If that becomes annoying, the fix
-is to drop Phase 2 rather than to shorten `switchTime` — Phase 3's `MONITORS 69/69` covers
-the same ground at lower resolution, and Phase 2 earns its slot only when you want the
-per-service response times.
+The dwell came down from 30s once there were three panels. 30s was chosen when the redraw
+cost was the best-understood constraint, but it optimised the wrong thing — there is no
+panel here that takes more than about three seconds to read, and a 90s wait for the one
+number that says whether anything is wrong is far worse than 13% of a link nothing else
+is using.
+
+The rotation also turns out to be the cheapest retention countermeasure on the display: no
+pixel holds one value for more than ten seconds, which is the same problem `--scrub-interval`
+and `--pixel-shift` exist to solve, addressed for free.
+
+Below about 8s the wipe occupies a quarter of the cycle and the panel reads as permanently
+mid-refresh. That is the floor. Change it in `cfg/panels.json` and restart the renderer —
+no rebuild, no patch.
 
 ## Regenerating the artwork
 

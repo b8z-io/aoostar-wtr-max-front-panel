@@ -1,6 +1,6 @@
 {
   "setup": {
-    "switchTime": "30",
+    "switchTime": "10",
     "refresh": 1
   },
   "mianban": [],

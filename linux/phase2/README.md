@@ -97,6 +97,12 @@ prints.
 ## Panel rotation cost
 
 Switching panels changes the background, so it costs a near-full frame — about 1.3s on
-this 12 Mbps link. At a 30s dwell that is roughly 4% of the link, which is fine. Do not
-lower `switchTime` much further: at 10s it would be 13%, and the panel would spend a
-noticeable fraction of its time mid-redraw.
+this 12 Mbps link. At the 10s dwell we settled on, that is roughly 13% of the link.
+
+That sounds like a lot and was the original reason for a 30s dwell, but it was the wrong
+thing to optimise: the cost is 1.3s of visible wipe, and the benefit is that nothing on
+this display holds still for long. Faster rotation is *also* the cheapest retention
+countermeasure available, because no pixel sits at one value for more than ten seconds.
+
+Below about 8s the wipe starts to occupy a quarter of the cycle and the panel reads as
+permanently mid-refresh. That is the floor, not 30s.
