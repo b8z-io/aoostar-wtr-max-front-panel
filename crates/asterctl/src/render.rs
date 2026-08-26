@@ -294,7 +294,7 @@ impl PanelRenderer {
         let scale = font.pt_to_px_scale(font_size * adjustment_hack).unwrap();
 
         let text = format_value(
-            value,
+            sensor.display_value(value),
             sensor.integer_digits.into(),
             sensor.decimal_digits.unwrap_or_default() as usize,
             unit,
@@ -332,7 +332,9 @@ impl PanelRenderer {
         // drive from thresholds) says something about the *value*, the stale colour says
         // there is no value. They must never be confused, so stale wins outright.
         let font_color = match state {
-            ValueState::Live => sensor.font_color.unwrap_or_default().into(),
+            // Threshold colour is chosen from the RAW value, not the displayed text, so a
+            // mapped word like "DOWN" still colours from the 0 behind it.
+            ValueState::Live => sensor.colour_for(value).into(),
             ValueState::Stale => sensor.stale_color().into(),
         };
         draw_text_mut(background, font_color, x, y, scale, &font, &text);

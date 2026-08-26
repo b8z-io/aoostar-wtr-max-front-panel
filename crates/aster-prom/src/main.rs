@@ -45,6 +45,21 @@ struct Args {
     /// System sensor refresh interval in seconds
     #[arg(short, long, requires = "input")]
     refresh: Option<u16>,
+    /// File containing the password for HTTP basic auth.
+    ///
+    /// Read from a file rather than taken as an argument on purpose: a credential passed on
+    /// the command line is visible in `ps` to every local user and ends up recorded in the
+    /// systemd unit. Only the first line is used, trailing newline stripped.
+    ///
+    /// Uptime-Kuma expects the API key as the password with an empty username, which is the
+    /// default, so `--password-file` alone is enough for it.
+    #[arg(long, value_name = "FILE")]
+    password_file: Option<PathBuf>,
+
+    /// Username for HTTP basic auth. Defaults to empty, which is what Uptime-Kuma wants.
+    #[arg(long, requires = "password_file", default_value = "")]
+    username: String,
+
     /// Client certificate file.
     #[arg(long, value_name = "FILE", requires("key"))]
     cert: Option<String>,
@@ -77,7 +92,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         fs::create_dir_all(parent)?;
     }
 
+    let basic_auth = match &args.password_file {
+        Some(path) => {
+            let password = fs::read_to_string(path)
+                .map_err(|e| format!("Failed to read password file {}: {e}", path.display()))?;
+            Some((args.username.clone(), password.trim_end().to_string()))
+        }
+        None => None,
+    };
+
     let config = ClientConfig {
+        basic_auth,
         cert_path: args.cert,
         key_path: args.key,
         accept_invalid_cert: args.accept_invalid_cert,

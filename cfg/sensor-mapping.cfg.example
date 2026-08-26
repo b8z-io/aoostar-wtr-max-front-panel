@@ -29,3 +29,35 @@ disk_root_usage_percent: disk_/dev/mapper/pve-root_usage_percent
 # aster-sysinfo and needs no mapping:
 #   cpu_usage_percent  mem_usage_percent  load_avg_one
 #   temperature_cpu    system_uptime      system_hostname
+
+# ---------------------------------------------------------------------------
+# Phase 2: Uptime-Kuma
+#
+# aster-prom uses the ENTIRE Prometheus metric line as the sensor key, labels
+# included:
+#
+#     uptime_kuma_status{monitor_name="internet",monitor_url="https://..."}
+#
+# That is unusable in a panel definition and would break silently if a monitor's
+# URL changed in Kuma, so panels ask for stable names and this file resolves them.
+#
+# Get the exact keys from the live endpoint — copy them verbatim, including the
+# braces, quotes and full URL:
+#
+#     aster-prom "http://localhost:3001/metrics" \
+#         --password-file ~/.hermes/secrets/kuma-panel-metrics.key --console \
+#         | grep -E 'internet|opnsense|traefik|hindsight|cloudflare'
+#
+# Then fill in the right-hand sides below. Any left unfilled render as "--",
+# which is correct: the sensor genuinely does not exist.
+
+# kuma_internet_status:     uptime_kuma_status{monitor_name="internet",monitor_url="..."}
+# kuma_internet_response:   uptime_kuma_response_time{monitor_name="internet",monitor_url="..."}
+# kuma_opnsense_status:     uptime_kuma_status{monitor_name="opnsense",monitor_url="..."}
+# kuma_opnsense_response:   uptime_kuma_response_time{monitor_name="opnsense",monitor_url="..."}
+# kuma_traefik_status:      uptime_kuma_status{monitor_name="traefik",monitor_url="..."}
+# kuma_traefik_response:    uptime_kuma_response_time{monitor_name="traefik",monitor_url="..."}
+# kuma_hindsight_status:    uptime_kuma_status{monitor_name="hindsight",monitor_url="..."}
+# kuma_hindsight_response:  uptime_kuma_response_time{monitor_name="hindsight",monitor_url="..."}
+# kuma_cloudflare_status:   uptime_kuma_status{monitor_name="cloudflare",monitor_url="..."}
+# kuma_cloudflare_response: uptime_kuma_response_time{monitor_name="cloudflare",monitor_url="..."}

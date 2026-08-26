@@ -1,0 +1,64 @@
+# Phase 2 sensor provider: Uptime-Kuma monitor states.
+#
+# Scrapes Kuma's Prometheus endpoint and writes /run/asterctl/sensors/kuma.txt.
+# The file stem is the source name asterctl ages values against, so renaming it
+# means updating max-age.cfg to match.
+#
+# The API key is read from a file, never passed as an argument: a credential on
+# the command line is visible in `ps` to every local user and would be recorded
+# in this unit. Point --password-file at a 0640 root:asterctl file.
+
+[Unit]
+Description=Uptime-Kuma monitor values for the AOOSTAR front panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=asterctl
+Group=asterctl
+
+# EDIT THE HOST: Kuma runs in docker2, not on pve-nas.
+ExecStart=/opt/asterctl/bin/aster-prom \
+    http://192.168.68.22:3001/metrics \
+    --password-file /etc/asterctl/kuma.key \
+    --out /run/asterctl/sensors/kuma.txt \
+    --temp-dir /run/asterctl \
+    --refresh 30
+
+# A failed scrape leaves the last values in place; the staleness layer marks
+# them "--" once they pass max-age, so a dead scraper shows as missing data
+# rather than as every monitor being fine.
+Restart=on-failure
+RestartSec=15
+
+# Readable by the renderer, which runs as the same user but via a different unit.
+UMask=002
+
+# START lock down
+CapabilityBoundingSet=
+LockPersonality=true
+RestrictNamespaces=true
+ProtectHome=true
+ProtectSystem=strict
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+MemoryDenyWriteExecute=true
+RestrictSUIDSGID=true
+KeyringMode=private
+ProtectClock=true
+RestrictRealtime=true
+PrivateTmp=true
+ProtectHostname=true
+# Needs the network, unlike the other two units.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+# END lock down
+
+[Install]
+WantedBy=multi-user.target

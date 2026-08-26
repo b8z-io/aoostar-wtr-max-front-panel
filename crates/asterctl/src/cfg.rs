@@ -401,6 +401,22 @@ pub struct Sensor {
     #[serde(rename = "xz_y")]
     pub xz_y: Option<i32>,
 
+    /// Colour bands, so the colour carries meaning rather than being decoration.
+    ///
+    /// Fork addition, not part of the AOOSTAR-X configuration format. The band with the
+    /// highest `min` that the value reaches wins. Non-numeric values and values below every
+    /// band fall back to `fontColor`.
+    #[serde(default)]
+    pub thresholds: Option<Vec<Threshold>>,
+
+    /// Substitutions applied to the raw value before rendering.
+    ///
+    /// Fork addition. Providers emit machine values — Uptime-Kuma reports a monitor's state
+    /// as `1` or `0` — which mean nothing on a glanceable panel. This maps them to words.
+    /// Colour selection still uses the raw value, so a mapped `DOWN` can still be red.
+    #[serde(default)]
+    pub value_map: Option<HashMap<String, String>>,
+
     /// Placeholder text rendered when this sensor has no current value.
     ///
     /// Fork addition, not part of the AOOSTAR-X configuration format. Optional and defaulted,
@@ -426,6 +442,15 @@ pub struct Sensor {
      */
 }
 
+/// One colour band of a [`Sensor`]'s threshold list.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct Threshold {
+    /// Lowest value this colour applies from, inclusive.
+    pub min: f32,
+    /// Colour to draw with, in `#RRGGBB` notation.
+    pub color: FontColor,
+}
+
 /// Default placeholder text for a sensor with no current value.
 pub const DEFAULT_STALE_TEXT: &str = "--";
 
@@ -446,6 +471,50 @@ impl Sensor {
                 .unwrap_or_else(|| DEFAULT_STALE_TEXT.to_string()),
             _ => self.min_value.unwrap_or_default().to_string(),
         }
+    }
+
+    /// The colour this value should be drawn in.
+    ///
+    /// Falls back to `fontColor` when no thresholds are configured, when the value is not
+    /// numeric, or when it sits below every band.
+    pub fn colour_for(&self, value: &str) -> FontColor {
+        let base = self.font_color.unwrap_or_default();
+        let Some(thresholds) = &self.thresholds else {
+            return base;
+        };
+        let Ok(numeric) = value.trim().parse::<f32>() else {
+            return base;
+        };
+
+        thresholds
+            .iter()
+            .filter(|t| numeric >= t.min)
+            .max_by(|a, b| a.min.total_cmp(&b.min))
+            .map(|t| t.color)
+            .unwrap_or(base)
+    }
+
+    /// The text to render for a raw value, after any configured substitution.
+    ///
+    /// Matches the trimmed value, then — since we do not control how providers format
+    /// numbers — retries on the integer form, so a map keyed on `1` still matches `1.0`.
+    pub fn display_value<'a>(&'a self, value: &'a str) -> &'a str {
+        let Some(map) = &self.value_map else {
+            return value;
+        };
+        let trimmed = value.trim();
+
+        if let Some(mapped) = map.get(trimmed) {
+            return mapped;
+        }
+        if let Ok(numeric) = trimmed.parse::<f64>()
+            && numeric.fract() == 0.0
+            && let Some(mapped) = map.get(&format!("{}", numeric.trunc() as i64))
+        {
+            return mapped;
+        }
+
+        value
     }
 
     /// The configured stale colour, or the default mid-grey.
@@ -662,4 +731,119 @@ where
 {
     let rounded = f32::deserialize(deserializer).map(f32::round)?;
     Ok(rounded as i32)
+}
+
+#[cfg(test)]
+mod value_presentation_tests {
+    use super::*;
+
+    // r##"..."## throughout: these fixtures contain "# from the colour literals, which
+    // would terminate a single-hash raw string.
+    fn sensor_json(extra: &str) -> Sensor {
+        // Fields using a custom deserializer must be present: serde does not imply a
+        // default for them, so a minimal fixture has to spell them out.
+        let json = format!(
+            r##"{{"mode":1,"label":"t","x":0,"y":0,"value":"","unit":"","pic":"",
+                  "integerDigits":-1,"decimalDigits":-1,"fontColor":"#ffffff"{extra}}}"##
+        );
+        serde_json::from_str(&json).expect("sensor should parse")
+    }
+
+    const BANDS: &str = r##","thresholds":[
+        {"min":0,"color":"#7ee787"},
+        {"min":70,"color":"#ffb454"},
+        {"min":85,"color":"#ff6b6b"}]"##;
+
+    fn rgb(s: &Sensor, value: &str) -> [u8; 3] {
+        let c: Rgb<u8> = s.colour_for(value).into();
+        c.0
+    }
+
+    #[test]
+    fn without_thresholds_the_base_colour_is_used() {
+        assert_eq!(rgb(&sensor_json(""), "99"), [255, 255, 255]);
+    }
+
+    #[test]
+    fn the_highest_band_the_value_reaches_wins() {
+        let s = sensor_json(BANDS);
+        assert_eq!(
+            rgb(&s, "10"),
+            [0x7e, 0xe7, 0x87],
+            "low sits in the first band"
+        );
+        assert_eq!(
+            rgb(&s, "75"),
+            [0xff, 0xb4, 0x54],
+            "mid crosses into the second"
+        );
+        assert_eq!(rgb(&s, "92"), [0xff, 0x6b, 0x6b], "high reaches the third");
+    }
+
+    #[test]
+    fn a_band_boundary_is_inclusive() {
+        assert_eq!(rgb(&sensor_json(BANDS), "70"), [0xff, 0xb4, 0x54]);
+    }
+
+    #[test]
+    fn values_below_every_band_fall_back() {
+        let s = sensor_json(r##","thresholds":[{"min":50,"color":"#ff0000"}]"##);
+        assert_eq!(rgb(&s, "10"), [255, 255, 255]);
+    }
+
+    #[test]
+    fn non_numeric_values_fall_back() {
+        assert_eq!(rgb(&sensor_json(BANDS), "192.168.68.24"), [255, 255, 255]);
+    }
+
+    #[test]
+    fn negative_values_are_handled() {
+        let s = sensor_json(r##","thresholds":[{"min":-10,"color":"#00ff00"}]"##);
+        assert_eq!(rgb(&s, "-5"), [0, 255, 0]);
+    }
+
+    #[test]
+    fn without_a_map_the_value_passes_through() {
+        assert_eq!(sensor_json("").display_value("1"), "1");
+    }
+
+    #[test]
+    fn mapped_values_are_substituted() {
+        let s = sensor_json(r##","valueMap":{"1":"UP","0":"DOWN"}"##);
+        assert_eq!(s.display_value("1"), "UP");
+        assert_eq!(s.display_value("0"), "DOWN");
+    }
+
+    /// Providers format numbers as they please; a map keyed on 1 must still match 1.0.
+    #[test]
+    fn a_float_formatted_integer_still_matches() {
+        let s = sensor_json(r##","valueMap":{"1":"UP"}"##);
+        assert_eq!(s.display_value("1.0"), "UP");
+        assert_eq!(s.display_value(" 1 "), "UP");
+    }
+
+    #[test]
+    fn unmapped_values_pass_through_untouched() {
+        let s = sensor_json(r##","valueMap":{"1":"UP"}"##);
+        assert_eq!(s.display_value("7"), "7");
+        assert_eq!(s.display_value("hello"), "hello");
+    }
+
+    /// The point of separating the two: a mapped word still colours from the number.
+    #[test]
+    fn colour_comes_from_the_raw_value_not_the_mapped_text() {
+        let s = sensor_json(
+            r##","valueMap":{"0":"DOWN","1":"UP"},"thresholds":[{"min":0,"color":"#ff0000"},{"min":1,"color":"#00ff00"}]"##,
+        );
+        assert_eq!(s.display_value("0"), "DOWN");
+        assert_eq!(rgb(&s, "0"), [255, 0, 0], "DOWN must still be red");
+        assert_eq!(rgb(&s, "1"), [0, 255, 0], "UP must still be green");
+    }
+
+    #[test]
+    fn vendor_configuration_without_the_new_fields_still_parses() {
+        let s = sensor_json("");
+        assert!(s.thresholds.is_none());
+        assert!(s.value_map.is_none());
+    }
 }

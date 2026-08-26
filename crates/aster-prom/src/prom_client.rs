@@ -13,6 +13,12 @@ use std::time::Duration;
 /// HTTP client configuration
 #[derive(Debug)]
 pub struct ClientConfig {
+    /// Optional HTTP basic auth as (username, password).
+    ///
+    /// Kept out of the URL deliberately: credentials in a URL end up in the systemd unit
+    /// file and in `ps` output for every local user to read. Uptime-Kuma expects an empty
+    /// username with the API key as the password.
+    pub basic_auth: Option<(String, String)>,
     pub cert_path: Option<String>,
     pub key_path: Option<String>,
     pub accept_invalid_cert: bool,
@@ -23,6 +29,7 @@ pub struct ClientConfig {
 /// Main application structure
 pub struct PromClient {
     client: reqwest::Client,
+    basic_auth: Option<(String, String)>,
 }
 
 impl PromClient {
@@ -44,7 +51,10 @@ impl PromClient {
 
         let client = client_builder.build()?;
 
-        Ok(PromClient { client })
+        Ok(PromClient {
+            client,
+            basic_auth: config.basic_auth,
+        })
     }
 
     pub async fn fetch_text_metrics(
@@ -67,12 +77,11 @@ impl PromClient {
         url: &str,
         accept_header: &str,
     ) -> Result<(Vec<u8>, String), Box<dyn std::error::Error>> {
-        let response = self
-            .client
-            .get(url)
-            .header("Accept", accept_header)
-            .send()
-            .await?;
+        let mut request = self.client.get(url).header("Accept", accept_header);
+        if let Some((user, password)) = &self.basic_auth {
+            request = request.basic_auth(user, Some(password));
+        }
+        let response = request.send().await?;
 
         if !response.status().is_success() {
             return Err(format!("HTTP request failed with status: {}", response.status()).into());
@@ -321,6 +330,7 @@ mod tests {
     #[test]
     fn test_text_metric_parsing() {
         let client = PromClient::new(ClientConfig {
+            basic_auth: None,
             cert_path: None,
             key_path: None,
             accept_invalid_cert: false,
@@ -350,6 +360,7 @@ http_requests_total{method="post",code="400"} 3
     #[test]
     fn test_text_metric_parsing_with_timestamp() {
         let client = PromClient::new(ClientConfig {
+            basic_auth: None,
             cert_path: None,
             key_path: None,
             accept_invalid_cert: false,

@@ -1,0 +1,51 @@
+# Phase 1 renderer: draws the host panel on the front LCD.
+#
+# Deliberately Wants= rather than Requires= on the sensor provider. If the
+# provider dies, the panel must keep rendering — showing "--" placeholders and
+# a ticking clock — because a blank screen and a screen full of stale numbers
+# are both worse than a screen that admits it has no data.
+
+[Unit]
+Description=AOOSTAR front panel renderer
+After=local-fs.target aster-sysinfo-host.service
+Wants=aster-sysinfo-host.service
+
+[Service]
+Type=exec
+User=asterctl
+Group=asterctl
+# /dev/ttyACM0 is group-dialout on Debian
+SupplementaryGroups=dialout
+
+ExecStart=/opt/asterctl/bin/asterctl \
+    --config /opt/asterctl/cfg/panels.json \
+    --config-dir /opt/asterctl/cfg \
+    --font-dir /opt/asterctl/fonts \
+    --panels /opt/asterctl/panels/phase1-host \
+    --panels /opt/asterctl/panels/phase2-services \
+    --sensor-path /run/asterctl/sensors \
+    --max-age 10 \
+    --scrub-interval 60 \
+    --pixel-shift 2
+
+# The scrub blanks the panel for ~25s an hour to counter image retention. This display
+# holds a static image indefinitely and a sensor layout never moves, so without it the
+# panel slowly burns in its own tiles — the vendor logo already ghosted through after
+# months on screen.
+
+# The frame cache lives in this process, so every restart costs a full-frame
+# redraw of roughly 1.3s over a 12 Mbps link. Do not restart tightly.
+Restart=on-failure
+RestartSec=10
+
+# Leave the display dark rather than frozen on a stale frame when we stop.
+ExecStopPost=-/opt/asterctl/bin/asterctl --off
+
+DeviceAllow=/dev/ttyACM0 rw
+
+# Lock down
+NoNewPrivileges=true
+UMask=0022
+
+[Install]
+WantedBy=multi-user.target
