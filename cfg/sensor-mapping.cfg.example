@@ -61,3 +61,24 @@ disk_root_usage_percent: disk_/dev/mapper/pve-root_usage_percent
 # kuma_hindsight_response:  uptime_kuma_response_time{monitor_name="hindsight",monitor_url="..."}
 # kuma_cloudflare_status:   uptime_kuma_status{monitor_name="cloudflare",monitor_url="..."}
 # kuma_cloudflare_response: uptime_kuma_response_time{monitor_name="cloudflare",monitor_url="..."}
+
+# ---------------------------------------------------------------------------
+# Phase 3: the homelab panel, fed by panel-metrics
+#
+# Most Phase 3 metrics need NO mapping. panel-metrics emits aggregates without
+# Prometheus labels, so the metric name is already a usable sensor key:
+#
+#   homelab_problems_total   homelab_sources_down
+#   truenas_pools_online     truenas_pools_total    truenas_uptime_days
+#   kuma_monitors_up         kuma_monitors_total    kuma_cert_days_min
+#
+# That is the payoff from aggregating upstream — compare the ten lines Phase 2
+# needs above to untangle one labelled metric.
+#
+# Only these two carry labels. Copy the right-hand sides verbatim from:
+#
+#     aster-prom "http://192.168.68.22:9101/metrics" --console \
+#         | grep -E 'gateway_up|speedtest_tracker_download'
+
+# opnsense_wan_gateway:    opnsense_gateway_up{gateway="WAN_GW"}
+# hass_speedtest_download: hass_entity_state{entity="sensor.speedtest_tracker_download",unit="Mbit/s"}

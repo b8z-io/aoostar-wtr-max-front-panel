@@ -15,11 +15,14 @@ services:
       - "9101:9101"
     volumes:
       - ./config.toml:/etc/panel-metrics/config.toml:ro
-      - ${HOME}/.hermes/secrets/truenas-readonly.key:/run/secrets/truenas.key:ro
-      - ${HOME}/.hermes/secrets/kuma-panel-metrics.key:/run/secrets/kuma.key:ro
-      - ${HOME}/.hermes/secrets/opnsense-key:/run/secrets/opnsense.id:ro
-      - ${HOME}/.hermes/secrets/opnsense-secret:/run/secrets/opnsense.key:ro
-      - ${HOME}/.hermes/secrets/hass.key:/run/secrets/hass.key:ro
+      # Secrets live in ./secrets beside this file, so the whole deployment is one
+      # directory that can be moved or backed up as a unit. Keep that directory
+      # 0700 and its contents 0600 — the bind mount preserves host permissions.
+      - ./secrets/truenas-readonly.key:/run/secrets/truenas.key:ro
+      - ./secrets/kuma-panel-metrics.key:/run/secrets/kuma.key:ro
+      - ./secrets/opnsense-key:/run/secrets/opnsense.id:ro
+      - ./secrets/opnsense-secret:/run/secrets/opnsense.key:ro
+      - ./secrets/hass.key:/run/secrets/hass.key:ro
     security_opt:
       - no-new-privileges:true
     read_only: true

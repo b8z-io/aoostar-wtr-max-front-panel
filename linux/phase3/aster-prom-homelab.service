@@ -1,0 +1,64 @@
+# Phase 3 sensor provider: aggregated homelab metrics from panel-metrics.
+#
+# Scrapes the panel-metrics container on docker2 and writes
+# /run/asterctl/sensors/homelab.txt. The file stem is the source name asterctl ages
+# values against, so renaming it means updating max-age.cfg to match.
+#
+# No credential. panel-metrics holds the four upstream secrets and serves an
+# unauthenticated aggregate on the LAN — that is the point of the split: one
+# service knows the keys, and the thing on the display network knows nothing.
+
+[Unit]
+Description=Aggregated homelab metrics for the AOOSTAR front panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=asterctl
+Group=asterctl
+
+# EDIT THE HOST: panel-metrics runs on docker2.
+ExecStart=/opt/asterctl/bin/aster-prom \
+    http://192.168.68.22:9101/metrics \
+    --out /run/asterctl/sensors/homelab.txt \
+    --temp-dir /run/asterctl \
+    --refresh 30
+
+# A failed scrape leaves the last values in place; the staleness layer marks them
+# "--" once they pass max-age. Note this is the second line of defence: the first
+# is panel-metrics itself, which omits a dead source's metrics entirely rather
+# than serving its last known values.
+Restart=on-failure
+RestartSec=15
+
+# Readable by the renderer, which runs as the same user but via a different unit.
+UMask=002
+
+# START lock down
+CapabilityBoundingSet=
+LockPersonality=true
+RestrictNamespaces=true
+ProtectHome=true
+ProtectSystem=strict
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+MemoryDenyWriteExecute=true
+RestrictSUIDSGID=true
+KeyringMode=private
+ProtectClock=true
+RestrictRealtime=true
+PrivateTmp=true
+ProtectHostname=true
+# Needs the network.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+# END lock down
+
+[Install]
+WantedBy=multi-user.target
