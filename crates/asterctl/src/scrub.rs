@@ -28,7 +28,10 @@
 //! seconds costs well under 1% of the link.
 
 use image::{Rgb, RgbImage};
-use std::time::Duration;
+use log::{debug, warn};
+use std::fs;
+use std::path::Path;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Default time a single scrub runs for.
 pub const DEFAULT_SCRUB_DURATION: Duration = Duration::from_secs(20);
@@ -123,6 +126,47 @@ impl Iterator for ScrubSequence {
         };
 
         Some(img)
+    }
+}
+
+/// How long ago the last scrub ran, according to the state file.
+///
+/// The in-process timer resets every time the service restarts, so a run of deploys or a
+/// crash loop can starve the display of conditioning indefinitely — three restarts during
+/// one deployment pushed the next scrub out by three full intervals.
+///
+/// Wall-clock time is used here, unlike the monotonic [`Instant`](std::time::Instant) the
+/// running timer uses, because it has to survive a process boundary. A clock step means at
+/// worst one extra or one skipped scrub, which does not matter; the state file lives in
+/// tmpfs and vanishes on reboot, which is the right scope.
+///
+/// Returns `None` when there is no usable state, in which case the caller should start its
+/// interval fresh.
+pub fn read_state(path: &Path) -> Option<Duration> {
+    let contents = fs::read_to_string(path).ok()?;
+    let seconds: u64 = contents.trim().parse().ok()?;
+    let written = UNIX_EPOCH.checked_add(Duration::from_secs(seconds))?;
+
+    match SystemTime::now().duration_since(written) {
+        Ok(elapsed) => Some(elapsed),
+        // The file is stamped in the future: the clock moved backwards. Treat it as
+        // just-scrubbed rather than scrubbing immediately.
+        Err(_) => Some(Duration::ZERO),
+    }
+}
+
+/// Record that a scrub has just run.
+///
+/// Best-effort: a failure here costs a mistimed scrub, never a failed render, so it warns
+/// rather than propagating.
+pub fn write_state(path: &Path) {
+    let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+        warn!("System clock is before the epoch; not recording scrub time");
+        return;
+    };
+    match fs::write(path, now.as_secs().to_string()) {
+        Ok(()) => debug!("Recorded scrub time in {path:?}"),
+        Err(e) => warn!("Could not record scrub time in {path:?}: {e}"),
     }
 }
 
@@ -279,6 +323,65 @@ mod tests {
             seq.next();
         }
         assert_eq!(seq.peek_kind(), CYCLE[0], "cycle should wrap around");
+    }
+
+    #[test]
+    fn state_round_trips_as_almost_no_elapsed_time() {
+        let dir = std::env::temp_dir().join("asterctl-scrub-state-roundtrip");
+        let _ = fs::remove_file(&dir);
+        write_state(&dir);
+
+        let elapsed = read_state(&dir).expect("state just written should read back");
+        assert!(elapsed < Duration::from_secs(5), "got {elapsed:?}");
+        let _ = fs::remove_file(&dir);
+    }
+
+    #[test]
+    fn a_missing_state_file_reads_as_none() {
+        let path = std::env::temp_dir().join("asterctl-scrub-state-does-not-exist");
+        let _ = fs::remove_file(&path);
+        assert_eq!(read_state(&path), None);
+    }
+
+    #[test]
+    fn an_old_timestamp_reports_a_long_elapsed_time() {
+        let path = std::env::temp_dir().join("asterctl-scrub-state-old");
+        let long_ago = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - 7200;
+        fs::write(&path, long_ago.to_string()).unwrap();
+
+        let elapsed = read_state(&path).expect("readable");
+        assert!(elapsed >= Duration::from_secs(7100), "got {elapsed:?}");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_future_timestamp_reads_as_just_scrubbed() {
+        let path = std::env::temp_dir().join("asterctl-scrub-state-future");
+        let future = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 9000;
+        fs::write(&path, future.to_string()).unwrap();
+
+        assert_eq!(
+            read_state(&path),
+            Some(Duration::ZERO),
+            "a backwards clock must not trigger an immediate scrub"
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn rubbish_in_the_state_file_reads_as_none() {
+        let path = std::env::temp_dir().join("asterctl-scrub-state-rubbish");
+        fs::write(&path, "not a timestamp").unwrap();
+        assert_eq!(read_state(&path), None);
+        let _ = fs::remove_file(&path);
     }
 
     #[test]

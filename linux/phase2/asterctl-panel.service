@@ -26,7 +26,8 @@ ExecStart=/opt/asterctl/bin/asterctl \
     --sensor-path /run/asterctl/sensors \
     --max-age 10 \
     --scrub-interval 60 \
-    --pixel-shift 2
+    --pixel-shift 2 \
+    --scrub-state-file /run/asterctl/scrub-state
 
 # The scrub blanks the panel for ~25s an hour to counter image retention. This display
 # holds a static image indefinitely and a sensor layout never moves, so without it the

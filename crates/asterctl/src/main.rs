@@ -6,7 +6,7 @@
 
 use asterctl::cfg::{MonitorConfig, Panel, load_custom_panel};
 use asterctl::render::PanelRenderer;
-use asterctl::scrub::{DEFAULT_SCRUB_DURATION, PixelShift, ScrubSequence};
+use asterctl::scrub::{self, DEFAULT_SCRUB_DURATION, PixelShift, ScrubSequence};
 use asterctl::sensors::{SensorFilter, read_filter_file, read_key_value_file, start_file_slurper};
 use asterctl::store::{SensorStore, StalenessConfig, parse_max_age_entries};
 use asterctl::{cfg, img};
@@ -126,6 +126,17 @@ struct Args {
     #[arg(long)]
     pixel_shift: Option<i32>,
 
+    /// File recording when the last retention scrub ran, so the schedule survives a
+    /// restart.
+    ///
+    /// The in-process timer resets on every restart, so a deployment or a crash loop can
+    /// starve the display of conditioning indefinitely — three restarts during one deploy
+    /// pushed the next scrub out by three full intervals.
+    ///
+    /// Put it on tmpfs: surviving a restart is the point, surviving a reboot is not.
+    #[arg(long, value_name = "FILE")]
+    scrub_state_file: Option<PathBuf>,
+
     /// Switch off display n seconds after loading image or running demo.
     #[arg(short, long)]
     off_after: Option<u32>,
@@ -206,6 +217,7 @@ fn main() -> anyhow::Result<()> {
                     .map(Duration::from_secs)
                     .unwrap_or(DEFAULT_SCRUB_DURATION),
                 pixel_shift_max: args.pixel_shift.unwrap_or(0),
+                state_file: args.scrub_state_file,
             },
         )?;
         return Ok(());
@@ -348,6 +360,8 @@ struct Maintenance {
     scrub_duration: Duration,
     /// Maximum whole-panel offset in pixels. Zero disables the shift.
     pixel_shift_max: i32,
+    /// Optional file recording the last scrub, so the schedule survives a restart.
+    state_file: Option<PathBuf>,
 }
 
 fn run_sensor_panel(
@@ -408,7 +422,15 @@ fn run_sensor_panel(
             warn!("--pixel-shift needs --scrub-interval to schedule it; the panel will not move");
         }
     }
+    // Carry the schedule across restarts where we can, so a deploy that bounces the
+    // service several times does not push the next scrub out by that many intervals.
     let mut last_scrub = Instant::now();
+    if let Some(state_file) = &maintenance.state_file
+        && let Some(elapsed) = scrub::read_state(state_file)
+    {
+        info!("Last scrub was {}s ago", elapsed.as_secs());
+        last_scrub = last_scrub.checked_sub(elapsed).unwrap_or(last_scrub);
+    }
     let mut scrub_seed: u32 = 0x1234_5678;
     let mut pixel_shift = PixelShift::new(maintenance.pixel_shift_max);
 
@@ -424,6 +446,9 @@ fn run_sensor_panel(
                 .wrapping_add(1_013_904_223);
             run_scrub(screen, maintenance.scrub_duration, scrub_seed)?;
             last_scrub = Instant::now();
+            if let Some(state_file) = &maintenance.state_file {
+                scrub::write_state(state_file);
+            }
 
             // Advance after the scrub, not before: the next panel render is a full frame
             // either way, so moving the panel here costs nothing.
