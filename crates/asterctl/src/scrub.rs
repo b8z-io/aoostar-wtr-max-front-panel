@@ -27,6 +27,7 @@
 //! Scrubbing is therefore something to do occasionally and briefly. Once an hour for twenty
 //! seconds costs well under 1% of the link.
 
+use chrono::{DateTime, Local, TimeDelta, Timelike};
 use image::{Rgb, RgbImage};
 use log::{debug, warn};
 use std::fs;
@@ -127,6 +128,36 @@ impl Iterator for ScrubSequence {
 
         Some(img)
     }
+}
+
+/// The next wall-clock time a scrub should run, anchored to a minute past the hour.
+///
+/// An interval measured from "whenever the service last started" puts the scrub at an
+/// arbitrary, drifting time of day. Anchoring it to a fixed minute makes it predictable:
+/// knowing when the panel will blank means a screen full of test patterns reads as
+/// scheduled maintenance rather than as a fault.
+///
+/// The result is always strictly after `now`, so restarting during the scheduled minute
+/// does not immediately re-run the scrub.
+///
+/// `interval` steps the schedule after each run. Whole hours keep every subsequent scrub on
+/// the same minute; anything else drifts off the anchor, which the caller warns about.
+pub fn next_scrub_time(
+    now: DateTime<Local>,
+    minute: u32,
+    interval: Duration,
+) -> Option<DateTime<Local>> {
+    let step = TimeDelta::from_std(interval).ok()?;
+    let mut next = now
+        .with_minute(minute.min(59))?
+        .with_second(0)?
+        .with_nanosecond(0)?;
+
+    while next <= now {
+        next = next.checked_add_signed(step)?;
+    }
+
+    Some(next)
 }
 
 /// How long ago the last scrub ran, according to the state file.
@@ -249,6 +280,7 @@ impl XorShift32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Datelike;
 
     const SIZE: (u32, u32) = (64, 32);
 
@@ -323,6 +355,62 @@ mod tests {
             seq.next();
         }
         assert_eq!(seq.peek_kind(), CYCLE[0], "cycle should wrap around");
+    }
+
+    fn at(h: u32, m: u32, sec: u32) -> DateTime<Local> {
+        chrono::NaiveDate::from_ymd_opt(2026, 8, 26)
+            .unwrap()
+            .and_hms_opt(h, m, sec)
+            .unwrap()
+            .and_local_timezone(Local)
+            .unwrap()
+    }
+
+    const HOURLY: Duration = Duration::from_secs(3600);
+
+    #[test]
+    fn the_next_scrub_is_the_upcoming_anchor_minute() {
+        let next = next_scrub_time(at(10, 30, 0), 55, HOURLY).unwrap();
+        assert_eq!((next.hour(), next.minute()), (10, 55));
+    }
+
+    #[test]
+    fn past_the_anchor_it_rolls_to_the_next_hour() {
+        let next = next_scrub_time(at(10, 56, 0), 55, HOURLY).unwrap();
+        assert_eq!((next.hour(), next.minute()), (11, 55));
+    }
+
+    /// Restarting during the scheduled minute must not re-run the scrub straight away.
+    #[test]
+    fn exactly_on_the_anchor_waits_for_the_next_one() {
+        let next = next_scrub_time(at(10, 55, 0), 55, HOURLY).unwrap();
+        assert_eq!((next.hour(), next.minute()), (11, 55));
+    }
+
+    #[test]
+    fn seconds_into_the_anchor_minute_also_waits() {
+        let next = next_scrub_time(at(10, 55, 30), 55, HOURLY).unwrap();
+        assert_eq!((next.hour(), next.minute()), (11, 55));
+    }
+
+    #[test]
+    fn a_whole_hour_multiple_stays_on_the_anchor_minute() {
+        let next = next_scrub_time(at(9, 0, 0), 55, Duration::from_secs(7200)).unwrap();
+        assert_eq!(next.minute(), 55);
+        assert!(next > at(9, 0, 0));
+    }
+
+    #[test]
+    fn it_crosses_midnight_correctly() {
+        let next = next_scrub_time(at(23, 56, 0), 55, HOURLY).unwrap();
+        assert_eq!((next.hour(), next.minute()), (0, 55));
+        assert_eq!(next.day(), 27, "should roll into the next day");
+    }
+
+    #[test]
+    fn an_out_of_range_minute_is_clamped_rather_than_failing() {
+        let next = next_scrub_time(at(10, 0, 0), 99, HOURLY).unwrap();
+        assert_eq!(next.minute(), 59);
     }
 
     #[test]

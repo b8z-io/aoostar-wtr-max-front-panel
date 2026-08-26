@@ -27,6 +27,7 @@ ExecStart=/opt/asterctl/bin/asterctl \
     --max-age 10 \
     --scrub-interval 60 \
     --pixel-shift 2 \
+    --scrub-at-minute 55 \
     --scrub-state-file /run/asterctl/scrub-state
 
 # The scrub blanks the panel for ~25s an hour to counter image retention. This display

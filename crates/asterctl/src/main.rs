@@ -126,6 +126,17 @@ struct Args {
     #[arg(long)]
     pixel_shift: Option<i32>,
 
+    /// Anchor scrubs to this minute past the hour, so they happen at a predictable time.
+    ///
+    /// Without it the schedule is measured from whenever the service last started, which
+    /// puts the scrub at an arbitrary and drifting time of day. Anchored, you know when the
+    /// panel will blank — so a screen of test patterns reads as scheduled maintenance
+    /// rather than as a fault.
+    ///
+    /// Use with a whole-hour `--scrub-interval`, or successive scrubs drift off the anchor.
+    #[arg(long, value_name = "MINUTE")]
+    scrub_at_minute: Option<u32>,
+
     /// File recording when the last retention scrub ran, so the schedule survives a
     /// restart.
     ///
@@ -218,6 +229,7 @@ fn main() -> anyhow::Result<()> {
                     .unwrap_or(DEFAULT_SCRUB_DURATION),
                 pixel_shift_max: args.pixel_shift.unwrap_or(0),
                 state_file: args.scrub_state_file,
+                at_minute: args.scrub_at_minute,
             },
         )?;
         return Ok(());
@@ -360,6 +372,8 @@ struct Maintenance {
     scrub_duration: Duration,
     /// Maximum whole-panel offset in pixels. Zero disables the shift.
     pixel_shift_max: i32,
+    /// Anchor scrubs to this minute past the hour instead of measuring from startup.
+    at_minute: Option<u32>,
     /// Optional file recording the last scrub, so the schedule survives a restart.
     state_file: Option<PathBuf>,
 }
@@ -422,10 +436,29 @@ fn run_sensor_panel(
             warn!("--pixel-shift needs --scrub-interval to schedule it; the panel will not move");
         }
     }
-    // Carry the schedule across restarts where we can, so a deploy that bounces the
+    // Two scheduling modes. Anchored to a minute past the hour is preferred: it is
+    // predictable, and it survives restarts for free because the schedule is absolute
+    // rather than measured from process start.
+    let mut next_scrub: Option<chrono::DateTime<chrono::Local>> = None;
+    if let (Some(minute), Some(interval)) = (maintenance.at_minute, maintenance.interval) {
+        if !interval.as_secs().is_multiple_of(3600) {
+            warn!(
+                "--scrub-interval is not a whole number of hours, so scrubs will drift off \
+                 minute {minute} after the first"
+            );
+        }
+        next_scrub = scrub::next_scrub_time(chrono::Local::now(), minute, interval);
+        match next_scrub {
+            Some(at) => info!("Next scrub at {}", at.format("%H:%M")),
+            None => warn!("Could not compute a scrub schedule; falling back to the interval"),
+        }
+    }
+
+    // Interval mode only: carry the schedule across restarts, so a deploy that bounces the
     // service several times does not push the next scrub out by that many intervals.
     let mut last_scrub = Instant::now();
-    if let Some(state_file) = &maintenance.state_file
+    if next_scrub.is_none()
+        && let Some(state_file) = &maintenance.state_file
         && let Some(elapsed) = scrub::read_state(state_file)
     {
         info!("Last scrub was {}s ago", elapsed.as_secs());
@@ -438,9 +471,14 @@ fn run_sensor_panel(
     loop {
         // Between panels, never mid-panel: a scrub blanks the screen, and interrupting a
         // panel to do it would look like a fault rather than maintenance.
-        if let Some(interval) = maintenance.interval
-            && last_scrub.elapsed() >= interval
-        {
+        let due = match next_scrub {
+            Some(at) => chrono::Local::now() >= at,
+            None => maintenance
+                .interval
+                .is_some_and(|interval| last_scrub.elapsed() >= interval),
+        };
+
+        if due && let Some(interval) = maintenance.interval {
             scrub_seed = scrub_seed
                 .wrapping_mul(1_664_525)
                 .wrapping_add(1_013_904_223);
@@ -448,6 +486,12 @@ fn run_sensor_panel(
             last_scrub = Instant::now();
             if let Some(state_file) = &maintenance.state_file {
                 scrub::write_state(state_file);
+            }
+            if let Some(minute) = maintenance.at_minute {
+                next_scrub = scrub::next_scrub_time(chrono::Local::now(), minute, interval);
+                if let Some(at) = next_scrub {
+                    info!("Next scrub at {}", at.format("%H:%M"));
+                }
             }
 
             // Advance after the scrub, not before: the next panel render is a full frame
