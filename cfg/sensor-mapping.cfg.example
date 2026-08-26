@@ -51,9 +51,9 @@ disk_root_usage_percent: disk_/dev/mapper/pve-root_usage_percent
 # Then fill in the right-hand sides below. Any left unfilled render as "--",
 # which is correct: the sensor genuinely does not exist.
 
-# kuma_internet_status:     uptime_kuma_status{monitor_name="internet",monitor_url="..."}
-# kuma_internet_response:   uptime_kuma_response_time{monitor_name="internet",monitor_url="..."}
-# kuma_opnsense_status:     uptime_kuma_status{monitor_name="opnsense",monitor_url="..."}
+# kuma_cloudflared_status:   monitor_status{monitor_name="cloudflared",...}
+# kuma_cloudflared_response: monitor_response_time{monitor_name="cloudflared",...}
+# kuma_opnsense_status:     monitor_status{monitor_name="opnsense",...}
 # kuma_opnsense_response:   uptime_kuma_response_time{monitor_name="opnsense",monitor_url="..."}
 # kuma_traefik_status:      uptime_kuma_status{monitor_name="traefik",monitor_url="..."}
 # kuma_traefik_response:    uptime_kuma_response_time{monitor_name="traefik",monitor_url="..."}
