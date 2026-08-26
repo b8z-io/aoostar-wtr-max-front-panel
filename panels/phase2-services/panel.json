@@ -61,7 +61,7 @@
       "value": "",
       "fontFamily": "HarmonyOS_Sans_SC_Bold",
       "fontSize": 44,
-      "fontColor": "#7ee787",
+      "fontColor": "#5a6472",
       "fontWeight": "normal",
       "textAlign": "right",
       "integerDigits": -1,
@@ -95,7 +95,8 @@
         }
       ],
       "valueMap": {
-        "0": "--"
+        "0": "--",
+        "-1": "--"
       }
     },
     {
@@ -156,7 +157,7 @@
       "value": "",
       "fontFamily": "HarmonyOS_Sans_SC_Bold",
       "fontSize": 44,
-      "fontColor": "#7ee787",
+      "fontColor": "#5a6472",
       "fontWeight": "normal",
       "textAlign": "right",
       "integerDigits": -1,
@@ -190,7 +191,8 @@
         }
       ],
       "valueMap": {
-        "0": "--"
+        "0": "--",
+        "-1": "--"
       }
     },
     {
@@ -251,7 +253,7 @@
       "value": "",
       "fontFamily": "HarmonyOS_Sans_SC_Bold",
       "fontSize": 44,
-      "fontColor": "#7ee787",
+      "fontColor": "#5a6472",
       "fontWeight": "normal",
       "textAlign": "right",
       "integerDigits": -1,
@@ -285,7 +287,8 @@
         }
       ],
       "valueMap": {
-        "0": "--"
+        "0": "--",
+        "-1": "--"
       }
     },
     {
@@ -346,7 +349,7 @@
       "value": "",
       "fontFamily": "HarmonyOS_Sans_SC_Bold",
       "fontSize": 44,
-      "fontColor": "#7ee787",
+      "fontColor": "#5a6472",
       "fontWeight": "normal",
       "textAlign": "right",
       "integerDigits": -1,
@@ -380,7 +383,8 @@
         }
       ],
       "valueMap": {
-        "0": "--"
+        "0": "--",
+        "-1": "--"
       }
     },
     {
@@ -441,7 +445,7 @@
       "value": "",
       "fontFamily": "HarmonyOS_Sans_SC_Bold",
       "fontSize": 44,
-      "fontColor": "#7ee787",
+      "fontColor": "#5a6472",
       "fontWeight": "normal",
       "textAlign": "right",
       "integerDigits": -1,
@@ -475,7 +479,8 @@
         }
       ],
       "valueMap": {
-        "0": "--"
+        "0": "--",
+        "-1": "--"
       }
     },
     {

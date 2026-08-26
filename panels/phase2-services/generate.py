@@ -41,10 +41,14 @@ DOWN = "#ff6b6b"
 FAST = "#7ee787"
 OK = "#ffb454"
 SLOW = "#ff6b6b"
-# Kuma reports 0 ms for a monitor that is down. Left alone that renders as the
-# fastest service on the panel, in green — actively misleading next to a red
-# DOWN. Zero gets its own grey band and reads as "no measurement", matching the
-# staleness placeholder.
+# Kuma uses two sentinels for "no latency measured": 0 for a monitor that is
+# down, and -1 for one that never measures latency at all (push monitors, and
+# anything still pending). Both rendered green and read as the fastest service
+# on the panel — -1 ms in green next to UP is worse than useless.
+#
+# So grey is the BASE colour for response times, not green: anything that fails
+# to match a band falls back to "no measurement" rather than to "fast". Bands
+# then colour only the values that are real latencies.
 NO_READING = "#5a6472"
 
 MARGIN = 14
@@ -122,10 +126,10 @@ def build_panel() -> dict:
             value_map={"0": "DOWN", "1": "UP"},
         ))
         s.append(sensor(
-            f"kuma_{key}_response", COL_RESP_X, y + 6, COL_RESP_W, ROW_H - 16, 44, FAST,
-            align="right", unit=" ms",
+            f"kuma_{key}_response", COL_RESP_X, y + 6, COL_RESP_W, ROW_H - 16, 44,
+            NO_READING, align="right", unit=" ms",
             thresholds=[(0, NO_READING), (1, FAST), (200, OK), (500, SLOW)],
-            value_map={"0": "--"},
+            value_map={"0": "--", "-1": "--"},
         ))
 
     # Source health, so a dead scrape is distinguishable from every monitor being up.
