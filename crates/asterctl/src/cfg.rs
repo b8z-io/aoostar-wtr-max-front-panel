@@ -793,7 +793,7 @@ mod value_presentation_tests {
 
     #[test]
     fn non_numeric_values_fall_back() {
-        assert_eq!(rgb(&sensor_json(BANDS), "192.168.68.24"), [255, 255, 255]);
+        assert_eq!(rgb(&sensor_json(BANDS), "192.0.2.24"), [255, 255, 255]);
     }
 
     #[test]

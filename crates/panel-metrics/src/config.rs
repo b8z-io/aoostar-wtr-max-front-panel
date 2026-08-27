@@ -183,7 +183,7 @@ mod tests {
             "pm-truenas.toml",
             r#"
             [truenas]
-            url = "https://192.168.68.24"
+            url = "https://192.0.2.24"
             token_file = "/etc/panel-metrics/truenas.key"
             accept_invalid_cert = true
             "#,
@@ -191,7 +191,7 @@ mod tests {
         let cfg = Config::load(&path).unwrap();
         let truenas = cfg.truenas.expect("should parse");
 
-        assert_eq!(truenas.endpoint.url, "https://192.168.68.24");
+        assert_eq!(truenas.endpoint.url, "https://192.0.2.24");
         assert!(truenas.endpoint.accept_invalid_cert);
         assert_eq!(truenas.endpoint.timeout_seconds, 10, "default applies");
     }

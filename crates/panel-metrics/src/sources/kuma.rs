@@ -230,7 +230,7 @@ mod tests {
 # HELP uptime_kuma_monitor_status Monitor Status (1 = UP, 0 = DOWN)
 # TYPE uptime_kuma_monitor_status gauge
 uptime_kuma_monitor_status{monitor_name="internet",monitor_url="https://1.1.1.1"} 1 1690387200000
-uptime_kuma_monitor_status{monitor_name="opnsense",monitor_url="https://192.168.68.1"} 1 1690387200000
+uptime_kuma_monitor_status{monitor_name="opnsense",monitor_url="https://192.0.2.1"} 1 1690387200000
 uptime_kuma_monitor_status{monitor_name="traefik",monitor_url="https://t.example"} 0 1690387200000
 uptime_kuma_monitor_status{monitor_name="pending one",monitor_url="https://p.example"} 2 1690387200000
 # HELP uptime_kuma_certificate_valid Is the certificate valid?

@@ -39,7 +39,7 @@ Kuma. So the panel asks for stable names (`kuma_internet_status`) and
 Get the exact keys from the live endpoint and copy them **verbatim**, braces and all:
 
 ```shell
-/opt/asterctl/bin/aster-prom "http://192.168.68.22:3001/metrics" \
+/opt/asterctl/bin/aster-prom "http://192.0.2.22:3001/metrics" \
     --password-file /etc/asterctl/kuma.key --console \
     | grep -E 'internet|opnsense|traefik|hindsight|cloudflare'
 ```
@@ -74,7 +74,7 @@ sudo systemctl enable --now aster-prom-kuma.service
 sudo systemctl restart asterctl-panel.service
 ```
 
-Edit the Kuma host in `aster-prom-kuma.service` first — it points at docker2, not pve-nas.
+Edit the Kuma host in `aster-prom-kuma.service` first — it points at docker-host, not nas-host.
 
 `cp -r` preserves the `fonts` symlink; copying the panel directory another way breaks it.
 

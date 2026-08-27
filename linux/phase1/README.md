@@ -1,4 +1,4 @@
-# Phase 1 deployment — pve-nas
+# Phase 1 deployment — nas-host
 
 Two processes, two units, no network, no persistent writes.
 

@@ -126,15 +126,15 @@ reliably survive reboots. Hermes's point, and correct.
 ## 3. Proposed topology
 
 ```
-pve-nas host  — no Docker, no LXC, static binaries + systemd units
+nas-host host  — no Docker, no LXC, static binaries + systemd units
 │
 ├── aster-sysinfo --refresh 3     →  /run/asterctl/sensors/host.txt      (Phase 1)
 ├── aster-prom  ← kuma/metrics    →  /run/asterctl/sensors/kuma.txt      (Phase 2)
-├── aster-prom  ← docker2:<port>  →  /run/asterctl/sensors/homelab.txt   (Phase 3)
+├── aster-prom  ← docker-host:<port>  →  /run/asterctl/sensors/homelab.txt   (Phase 3)
 │
 └── asterctl --sensor-path /run/asterctl/sensors  ──USB serial──▶  front panel
 
-docker2 (VM 222, same physical host)
+docker-host (VM 222, same physical host)
 └── panel-metrics container  →  Prometheus text on :<port>               (Phase 3)
     fans out to TrueNAS / OPNsense / Home Assistant / GPU-inside-the-VM
 ```
@@ -173,7 +173,7 @@ that test — `uptime_kuma_uptime` is already a 0-100 ratio, `uptime_kuma_status
 (`crates/asterctl/src/sensors.rs`, `read_path` / `start_file_slurper`). Every `.txt` file in
 `--sensor-path` is read and merged.
 
-So one file per source, each with its own failure domain. When docker2 is unreachable,
+So one file per source, each with its own failure domain. When docker-host is unreachable,
 `host.txt` keeps updating and the panel still shows live local vitals. The local-fallback
 behaviour falls out of the design rather than needing to be built.
 
@@ -193,17 +193,17 @@ behaviour falls out of the design rather than needing to be built.
 ## 4. Why not Option C (single LXC)
 
 The LXC option is coherent and the USB-passthrough pattern is documented. Rejected on
-balance for four reasons, **in this order of weight** (revised after Hermes confirmed docker2
-is VM 222 on `pve-nas`):
+balance for four reasons, **in this order of weight** (revised after Hermes confirmed docker-host
+is VM 222 on `nas-host`):
 
 1. **`serialport` enumeration goes through libudev.** In an unprivileged LXC `/run/udev` is
    usually not populated, so `available_ports()` may return nothing and VID/PID
    auto-detection is lost. You'd have to hard-pin `--device`. That trades a solved problem
    for an unsolved one.
 2. **More moving parts on a fragile host** — *weakened, see below*. USB passthrough to LXC alongside GPU passthrough
-   to docker2, on the box that recently caused an outage, is not where complexity belongs.
+   to docker-host, on the box that recently caused an outage, is not where complexity belongs.
 3. **Dev iteration in LXC is clunkier than Docker** — the original report's own con.
-4. **It doesn't actually fix the dependency problem.** Anything outside `pve-nas` (TrueNAS,
+4. **It doesn't actually fix the dependency problem.** Anything outside `nas-host` (TrueNAS,
    Kuma, HA, OPNsense) is still a network call away. C moves the boundary; it doesn't remove
    it. The real answer is §6.
 
@@ -331,7 +331,7 @@ sources are tools that already exist. `panel-metrics` is deferred to Phase 3, wh
 component we have to write and maintain now lives. That lets the pipeline be proven against
 real data before anything custom exists.
 
-**Phase 1 — vertical slice.** `aster-sysinfo` on `pve-nas` writing `host.txt` every 3s. One
+**Phase 1 — vertical slice.** `aster-sysinfo` on `nas-host` writing `host.txt` every 3s. One
 custom panel: CPU %, memory %, load, uptime, host temp, clock, staleness indicator. Proves
 serial + render + mapping + honesty rules end to end. No network, no new binaries to source.
 
@@ -339,7 +339,7 @@ serial + render + mapping + honesty rules end to end. No network, no new binarie
 Second panel, rotation enabled, per-source max ages exercised for real. Kuma's metrics are
 already panel-shaped gauges, so still no custom code.
 
-**Phase 3 — the bespoke part.** `panel-metrics` on docker2 aggregating TrueNAS, OPNsense,
+**Phase 3 — the bespoke part.** `panel-metrics` on docker-host aggregating TrueNAS, OPNsense,
 Home Assistant (Hypervolt EV state, and Speedtest via HA rather than a separate scrape) and
 GPU stats from inside the VM. Sample responses and pitfalls for each are in
 [`RECON-sources.md`](RECON-sources.md). Editorial pass on what earns space.
@@ -375,7 +375,7 @@ attached:
 ```
 
 This is the single most valuable property of the codebase — the entire visual design loop
-runs without touching `pve-nas`.
+runs without touching `nas-host`.
 
 ### ⚠️ Fork gotcha: disable the release workflow first
 
@@ -394,7 +394,7 @@ start cutting GitHub releases under `b8z-io`. Gate or remove it before the first
 | **Hermes** | Live endpoint reconnaissance, deployment, systemd units, running against real hardware | Has the credentials, the network and the serial port |
 | **Batesy** | Conductor; carries specs and findings between the two | — |
 
-**Hard constraint:** Claude's sandbox cannot reach `192.168.68.0/24`. Nothing can be tested
+**Hard constraint:** Claude's sandbox cannot reach `192.0.2.0/24`. Nothing can be tested
 against live endpoints from there — only simulated. Conversely Hermes cannot easily evaluate
 rendered output visually.
 
@@ -420,14 +420,14 @@ The device-node question is closed — VID/PID auto-detection makes it irrelevan
    of a competing device sharing the transaction translator is zero based on the data
    available — the LCD is the hub's sole occupant. The 12 Mbps ceiling stands alone.
 
-2. **Is docker2 hosted on `pve-nas`** or a different Proxmox node? Affects the blast-radius
+2. **Is docker-host hosted on `nas-host`** or a different Proxmox node? Affects the blast-radius
    argument in §4 — if it's the same box, the failure domains are less separate than assumed.
 
-   **Hermes:** docker2 is VM 222 on **pve-nas** (confirmed via cluster resources API). Same
+   **Hermes:** docker-host is VM 222 on **nas-host** (confirmed via cluster resources API). Same
    physical machine. This undercuts §4's second reason ('more moving parts on a fragile
    host') — Option A's two deployment targets both touch the same box, so the failure
    domains are less separate than assumed. The argument from complexity still holds (GPU
-   passthrough to docker2 + USB passthrough to an LXC is more risk than a static binary on
+   passthrough to docker-host + USB passthrough to an LXC is more risk than a static binary on
    the host), but the argument from separation of concerns is weaker with both targets on
    the same host.
 
@@ -437,18 +437,18 @@ The device-node question is closed — VID/PID auto-detection makes it irrelevan
    LXC) is a concrete technical blocker, untouched by this finding, so it is now the headline.
 
    The local-fallback behaviour **survives** intact: a VM can die independently of its host,
-   so `host.txt` keeps updating when docker2 goes down. What died is the "separate blast
+   so `host.txt` keeps updating when docker-host goes down. What died is the "separate blast
    radius" framing, not the behaviour the design depends on.
 
-3. **GPU metrics.** The 780M is passed through to docker2. Can host sysfs still see
+3. **GPU metrics.** The 780M is passed through to docker-host. Can host sysfs still see
    `amdgpu` hwmon, or must GPU stats come from inside the VM? If the latter, they belong in
    `panel-metrics`, not `node_exporter`.
 
    **Hermes:** Host cannot see amdgpu hwmon. The iGPU (0000:01:00.0) and its HDMI audio
-   (0000:01:00.1) are fully bound to vfio-pci and passed through to docker2. Inside docker2,
+   (0000:01:00.1) are fully bound to vfio-pci and passed through to docker-host. Inside docker-host,
    amdgpu is loaded and the hwmon is available at
    `/sys/class/drm/card0/device/hwmon/hwmon0/name` = `amdgpu`. GPU stats (core %, memory %,
-   temp, power) must come from inside docker2 — they belong in `panel-metrics`, not
+   temp, power) must come from inside docker-host — they belong in `panel-metrics`, not
    `node_exporter`.
 
 4. **Per-source API detail** for Phase 2/3 (§7).
@@ -489,7 +489,7 @@ The device-node question is closed — VID/PID auto-detection makes it irrelevan
 
    Batesy to measure; the specimen covers the plausible range meanwhile.
 
-7. **Anything on `pve-nas` that would object to `node_exporter`** listening on :9100?
+7. **Anything on `nas-host` that would object to `node_exporter`** listening on :9100?
 
    **Hermes:** Nothing on the services list conflicts. Running services: chrony, cron,
    ksmtuned, lxcfs, postfix, proxmox-firewall, pve-{cluster,daemon,firewall,fw-logger,

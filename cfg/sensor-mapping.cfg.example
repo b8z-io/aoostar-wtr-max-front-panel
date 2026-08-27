@@ -96,7 +96,7 @@ disk_root_usage_percent: disk_/dev/mapper/pve-root_usage_percent
 #
 # Only these two carry labels. Copy the right-hand sides verbatim from:
 #
-#     aster-prom "http://192.168.68.22:9101/metrics" --console \
+#     aster-prom "http://192.0.2.22:9101/metrics" --console \
 #         | grep -E 'gateway_up|speedtest_tracker_download'
 
 # opnsense_wan_gateway:    opnsense_gateway_up{gateway="WAN_GW"}

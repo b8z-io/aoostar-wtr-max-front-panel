@@ -31,7 +31,7 @@ const HOST_VALUES: &[(&str, &str)] = &[
 ];
 
 const HOMELAB_VALUES: &[(&str, &str)] = &[
-    ("net_ip_address", "192.168.68.24"),
+    ("net_ip_address", "192.0.2.24"),
     ("gpu_core", "98"),
     ("gpu_temperature", "78"),
     ("net_upload_speed", "100"),

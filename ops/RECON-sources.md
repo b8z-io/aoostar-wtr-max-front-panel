@@ -20,7 +20,7 @@
 > which would put them in `docker inspect` output.
 
 
-> Queried 2026-08-25 via SSH to docker2 (hermes-bot@100.96.97.65) and Home Assistant API.
+> Queried 2026-08-25 via SSH to docker-host (user@100.96.97.65) and Home Assistant API.
 
 ---
 
@@ -28,7 +28,7 @@
 
 | Field | Value |
 |---|---|
-| Host | `192.168.68.23:8123` |
+| Host | `192.0.2.23:8123` |
 | Auth | `Authorization: Bearer <long-lived-token>` (set as `HASS_TOKEN` in `.env`) |
 | API root | `GET /api/` → `{"message": "API running."}` |
 | Rate limits | None observed. HA returns instantly under load. |
@@ -84,7 +84,7 @@ GET /api/states/sensor.hypervolt_session_energy
 ### Pitfalls
 
 - Entity IDs may not be predictable. The `hypervolt_charge_power` sensor name was wrong; the right one was `hypervolt_session_energy`. Plan: bulk-fetch `/api/states` and filter by domain, rather than hardcoding IDs.
-- HAOS is on a separate VM (192.168.68.23). The docker2 `panel-metrics` container can reach it via the LAN.
+- HAOS is on a separate VM (192.0.2.23). The docker-host `panel-metrics` container can reach it via the LAN.
 - Speedtest sensors are already a Phase 3 source for free — **no separate Speedtest-Tracker scrape needed**.
 - HA's `/metrics` endpoint does NOT expose Prometheus-formatted data (only `/api/` REST).
 
@@ -96,7 +96,7 @@ GET /api/states/sensor.hypervolt_session_energy
 
 | Field | Value |
 |---|---|
-| Host | `localhost:3001` (inside docker2) / `https://uptime-kuma.local.batesyboy.com` |
+| Host | `localhost:3001` (inside docker-host) / `https://uptime-kuma.local.example.com` |
 | Auth | HTTP Basic Auth, username blank, password = API key in `uk<ID>_<secret>` format |
 | API root | `/metrics` — Prometheus text exposition format |
 | Rate limits | None. Kuma returns sub-100ms even with 80+ monitors. Rate limiter at 60 req/min per API key. |
@@ -111,16 +111,16 @@ GET /metrics (with Basic Auth)
 ```prometheus
 # HELP uptime_kuma_certificate_valid Is the certificate valid? 0 = invalid, 1 = valid
 # TYPE uptime_kuma_certificate_valid gauge
-uptime_kuma_certificate_valid{monitor_name="mail-archive",monitor_url="https://mail-archive.local.batesyboy.com"} 1 1690387200000
+uptime_kuma_certificate_valid{monitor_name="mail-archive",monitor_url="https://mail-archive.local.example.com"} 1 1690387200000
 # HELP uptime_kuma_response_time Average response time in ms
 # TYPE uptime_kuma_response_time gauge
-uptime_kuma_response_time{monitor_name="mail-archive",monitor_url="https://mail-archive.local.batesyboy.com"} 185 1690387200000
+uptime_kuma_response_time{monitor_name="mail-archive",monitor_url="https://mail-archive.local.example.com"} 185 1690387200000
 # HELP uptime_kuma_uptime Uptime ratio (0-100)
 # TYPE uptime_kuma_uptime gauge
-uptime_kuma_uptime{monitor_name="mail-archive",monitor_url="https://mail-archive.local.batesyboy.com"} 99.96 1690387200000
+uptime_kuma_uptime{monitor_name="mail-archive",monitor_url="https://mail-archive.local.example.com"} 99.96 1690387200000
 # HELP uptime_kuma_status Current monitor status (1=UP, 0=DOWN)
 # TYPE uptime_kuma_status gauge
-uptime_kuma_status{monitor_name="mail-archive",monitor_url="https://mail-archive.local.batesyboy.com"} 1 1690387200000
+uptime_kuma_status{monitor_name="mail-archive",monitor_url="https://mail-archive.local.example.com"} 1 1690387200000
 ```
 
 (endpoints continue for all ~80 monitors with cert_valid, response_time, uptime, status per monitor)
@@ -158,14 +158,14 @@ Single scrape of `/metrics` returns *everything*. ~80 monitors × 4 metrics = ~3
 
 ---
 
-## TrueNAS (VM 247 on pve-nas)
+## TrueNAS (VM 247 on nas-host)
 
 > **Credentials found:** `~/.hermes/secrets/truenas-readonly.key`
 > **Bearer token confirmed working against HTTPS.**
 
 | Field | Value |
 |---|---|
-| Host | `https://192.168.68.24` (HTTPS on 443 — HTTP port 80 did not respond) |
+| Host | `https://192.0.2.24` (HTTPS on 443 — HTTP port 80 did not respond) |
 | Auth | `Authorization: Bearer <token>` from `truenas-readonly.key` |
 | API root | `GET /api/v2.0/system/info` |
 | Rate limits | Unknown. TrueNAS API is synchronous and can block for slow ZFS operations. |
@@ -230,7 +230,7 @@ Returns SMART attributes including `Temperature_Celsius` (field 194).
 ### Pitfalls
 
 - **API uses HTTPS, not HTTP.** Port 80 returned nothing; HTTPS on 443 worked immediately.
-- TrueNAS is on **vmbr1** (separate physical NIC `enp100s0f1np1`), but is reachable at `192.168.68.24` from docker2 at 0.392ms ping.
+- TrueNAS is on **vmbr1** (separate physical NIC `enp100s0f1np1`), but is reachable at `192.0.2.24` from docker-host at 0.392ms ping.
 - Bearer token in `~/.hermes/secrets/truenas-readonly.key` is stable and working.
 - API responses can be slow under ZFS scrub or resilver. The scrub just finished with 0 errors — good timing.
 - Pool is a single RAIDZ1 vdev named `vault`. Single pool, no second pool visible.
@@ -245,7 +245,7 @@ Returns SMART attributes including `Temperature_Celsius` (field 194).
 
 | Field | Value |
 |---|---|
-| Host | `https://192.168.68.1` (HTTPS) |
+| Host | `https://192.0.2.1` (HTTPS) |
 | Auth | HTTP Basic Auth: key as username, secret as password |
 | API root | `GET /api/core/system/status` |
 | Rate limits | None observed. OPNsense's PHP backend returns responses in 50-200ms. |
@@ -313,8 +313,8 @@ Returns empty for the `hermes` read-only user (may need specific interface name 
 
 | Field | Value |
 |---|---|
-| Host | `https://speedtest.local.batesyboy.com` (Traefik on docker2, internal port 80) |
-| Auth | Internal (no auth on LAN — accessible to docker2 containers on the proxy network) |
+| Host | `https://speedtest.local.example.com` (Traefik on docker-host, internal port 80) |
+| Auth | Internal (no auth on LAN — accessible to docker-host containers on the proxy network) |
 | API root | `GET /api/speedtest/latest` |
 | Rate limits | SQLite-backed — concurrent reads are fine, writes are serialised (scheduled run every hour). |
 | Phase | **Phase 3** — but **already available as HA sensors**, see Home Assistant above. |
@@ -348,7 +348,7 @@ GET /api/speedtest/latest
 
 | Priority | Source | Cost | Provides | Auth | Status |
 |---|---|---|---|---|---|---|
-| 🟢 Free (Phase 1) | `node_exporter` on pve-nas host | `apt install`, static binary | CPU, mem, load, uptime, host temps | Localhost bound | **BLOCKED** — needs SSH to pve-nas host (password auth disabled) |
+| 🟢 Free (Phase 1) | `node_exporter` on nas-host host | `apt install`, static binary | CPU, mem, load, uptime, host temps | Localhost bound | **BLOCKED** — needs SSH to nas-host host (password auth disabled) |
 | 🟢 Free (Phase 2) | Uptime-Kuma `/metrics` | One HTTP call | 72-monitor status, cert health, response times, uptime | HTTP Basic `:<api_key>` in `uk<ID>_<secret>` format | 🟢 CONFIRMED — key in `~/.hermes/secrets/kuma-panel-metrics.key` |
 | 🟢 Free (Phase 3) | Home Assistant API | One HTTP call | Speedtest (already exists), Hypervolt EV state, any HA sensor | Bearer token | 🟢 CONFIRMED |
 | 🟢 Ready (Phase 2) | TrueNAS API | Bearer token in `secrets/` | Pool health, disk temps, capacity | Bearer token `~/.hermes/secrets/truenas-readonly.key` | 🟢 CONFIRMED (`vault` ONLINE) |

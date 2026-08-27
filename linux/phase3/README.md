@@ -44,7 +44,7 @@ Copy the right-hand sides **verbatim** from the live endpoint, braces, quotes an
 `aster-prom` uses the entire metric line as the sensor key:
 
 ```shell
-/opt/asterctl/bin/aster-prom "http://192.168.68.22:9101/metrics" --console \
+/opt/asterctl/bin/aster-prom "http://192.0.2.22:9101/metrics" --console \
     | grep -E 'gateway_up|speedtest_tracker_download'
 ```
 
@@ -68,10 +68,10 @@ between scrapes.
 
 ## Install
 
-On docker2, if the compose file moved to `./secrets` since you deployed:
+On docker-host, if the compose file moved to `./secrets` since you deployed:
 
 ```shell
-cd /home/hermes-bot/panel-metrics
+cd /home/user/panel-metrics
 docker compose up -d --build
 curl -s localhost:9101/metrics | grep homelab_
 ```
@@ -79,7 +79,7 @@ curl -s localhost:9101/metrics | grep homelab_
 You want two lines: `homelab_problems_total 0` and `homelab_sources_down 0`. If the first
 is missing, one of TrueNAS, Kuma or OPNsense is down — check `panel_metrics_source_up`.
 
-On pve-nas:
+On nas-host:
 
 ```shell
 sudo cp -r panels/phase3-homelab /opt/asterctl/panels/
@@ -90,7 +90,7 @@ sudo systemctl enable --now aster-prom-homelab.service
 sudo systemctl restart asterctl-panel.service
 ```
 
-Edit the host in `aster-prom-homelab.service` first — it points at docker2, not pve-nas.
+Edit the host in `aster-prom-homelab.service` first — it points at docker-host, not nas-host.
 
 `cp -r` preserves the `fonts` symlink; copying the panel directory another way breaks it.
 

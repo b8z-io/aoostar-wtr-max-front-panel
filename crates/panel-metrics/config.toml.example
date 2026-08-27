@@ -14,7 +14,7 @@ refresh_seconds = 30
 
 [truenas]
 # HTTPS only: port 80 does not answer.
-url = "https://192.168.68.24"
+url = "https://192.0.2.24"
 token_file = "/run/secrets/truenas.key"
 # The API blocks during a ZFS scrub, which is exactly when you want the panel.
 timeout_seconds = 15
@@ -22,12 +22,12 @@ timeout_seconds = 15
 accept_invalid_cert = true
 
 [kuma]
-url = "http://192.168.68.22:3001/metrics"
+url = "http://192.0.2.22:3001/metrics"
 # Empty username, API key as password. Same key as the Phase 2 scrape.
 token_file = "/run/secrets/kuma.key"
 
 [opnsense]
-url = "https://192.168.68.1"
+url = "https://192.0.2.1"
 # OPNsense splits its credential: key is the basic-auth username, secret the password.
 key_file = "/run/secrets/opnsense.id"
 token_file = "/run/secrets/opnsense.key"
@@ -37,7 +37,7 @@ timeout_seconds = 10
 accept_invalid_cert = true
 
 [hass]
-url = "http://192.168.68.23:8123"
+url = "http://192.0.2.23:8123"
 token_file = "/run/secrets/hass.key"
 # Named explicitly rather than bulk-fetched: entity IDs are not guessable, and naming
 # them makes a rename show up as a metric that stopped being emitted.

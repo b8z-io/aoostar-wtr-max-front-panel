@@ -2,7 +2,7 @@
 
 //! Aggregates homelab APIs into Prometheus text for the AOOSTAR front panel.
 //!
-//! Sits on docker2 and is scraped by `aster-prom` on pve-nas, which writes a sensor file
+//! Sits on docker-host and is scraped by `aster-prom` on nas-host, which writes a sensor file
 //! that `asterctl` renders. This is also where arithmetic lives — counts and sums such as
 //! "68 of 72 monitors up" — because nothing further down the chain performs any.
 //!
