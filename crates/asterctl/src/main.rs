@@ -7,6 +7,7 @@
 use asterctl::cfg::{MonitorConfig, Panel, load_custom_panel};
 use asterctl::render::PanelRenderer;
 use asterctl::sensors::{read_filter_file, read_key_value_file, start_file_slurper};
+use asterctl::store::{SensorStore, StalenessConfig, parse_max_age_entries};
 use asterctl::{cfg, img};
 use asterctl_lcd::{AooScreen, AooScreenBuilder, DISPLAY_SIZE};
 
@@ -95,6 +96,22 @@ struct Args {
     /// Simulate serial port for testing and development, `--device` and `--usb` options are ignored.
     #[arg(long)]
     simulate: bool,
+
+    /// Maximum age in seconds before a sensor value is treated as absent.
+    ///
+    /// A provider that dies leaves its last values behind, and without a maximum age they
+    /// keep rendering as though live. Past this age a value renders as a placeholder instead.
+    ///
+    /// Unset disables staleness handling entirely: values never expire.
+    #[arg(long)]
+    max_age: Option<u64>,
+
+    /// Per-source maximum age overrides, one `<sensor file stem>: <seconds>` pair per line.
+    ///
+    /// Loaded from the `config_dir` directory if no full path is specified.
+    /// Ignored if the file does not exist.
+    #[arg(long, default_value_t = String::from("max-age.cfg"))]
+    max_age_file: String,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -141,6 +158,7 @@ fn main() -> anyhow::Result<()> {
         let font_dir = PathBuf::from(args.font_dir);
         let sensor_path = PathBuf::from(args.sensor_path);
         let mapping_cfg = PathBuf::from(args.sensor_mapping);
+        let staleness = load_staleness(args.max_age, Path::new(&args.max_age_file), &cfg_dir)?;
         let cfg = load_configuration(&config, &cfg_dir, args.panels, &mapping_cfg)?;
         run_sensor_panel(
             &mut screen,
@@ -149,6 +167,7 @@ fn main() -> anyhow::Result<()> {
             font_dir,
             sensor_path,
             img_save_path,
+            staleness,
         )?;
         return Ok(());
     }
@@ -239,6 +258,7 @@ fn run_sensor_panel<B: Into<PathBuf>>(
     font_dir: B,
     sensor_path: B,
     img_save_path: Option<B>,
+    staleness: StalenessConfig,
 ) -> anyhow::Result<()> {
     let font_dir = font_dir.into();
     let config_dir = config_dir.into();
@@ -252,7 +272,8 @@ fn run_sensor_panel<B: Into<PathBuf>>(
         // renderer.set_save_progress_layer(true);
     }
 
-    let sensor_values: Arc<RwLock<HashMap<String, String>>> = Arc::new(RwLock::new(HashMap::new()));
+    let sensor_values: Arc<RwLock<SensorStore>> =
+        Arc::new(RwLock::new(SensorStore::new(staleness)));
 
     start_file_slurper(
         sensor_path,
@@ -290,6 +311,7 @@ fn run_sensor_panel<B: Into<PathBuf>>(
 
             // Keeping the read lock during panel rendering should be ok, otherwise we could always clone the HashMap
             let values = sensor_values.read().expect("RwLock is poisoned");
+            values.log_summary(Instant::now());
             update_panel(screen, &mut renderer, panel, &values)?;
             drop(values);
 
@@ -307,11 +329,46 @@ fn run_sensor_panel<B: Into<PathBuf>>(
     }
 }
 
+/// Build the staleness configuration from the global maximum age and optional per-source file.
+///
+/// Returns a disabled configuration when neither is set, in which case sensor values never
+/// expire and rendering behaves exactly as it did before staleness handling existed.
+fn load_staleness(
+    max_age: Option<u64>,
+    max_age_file: &Path,
+    config_dir: &Path,
+) -> anyhow::Result<StalenessConfig> {
+    let mut staleness = StalenessConfig::new(max_age.map(Duration::from_secs));
+
+    let path = if max_age_file.is_absolute() {
+        max_age_file.to_path_buf()
+    } else {
+        config_dir.join(max_age_file)
+    };
+
+    if path.is_file() {
+        info!("Loading per-source max age file {path:?}");
+        let mut entries = HashMap::new();
+        read_key_value_file(&path, &mut entries, None)?;
+        parse_max_age_entries(&entries, &mut staleness)?;
+    } else {
+        info!("No per-source max age file {path:?} available");
+    }
+
+    if staleness.enabled() {
+        info!("Staleness handling enabled");
+    } else {
+        info!("Staleness handling disabled: sensor values never expire");
+    }
+
+    Ok(staleness)
+}
+
 fn update_panel(
     screen: &mut AooScreen,
     renderer: &mut PanelRenderer,
     panel: &Panel,
-    values: &HashMap<String, String>,
+    values: &SensorStore,
 ) -> anyhow::Result<()> {
     debug!("Displaying panel '{}'...", panel.friendly_name());
 

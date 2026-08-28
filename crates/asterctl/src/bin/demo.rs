@@ -4,6 +4,7 @@
 use asterctl::cfg;
 use asterctl::font::FontHandler;
 use asterctl::render::PanelRenderer;
+use asterctl::store::SensorStore;
 use asterctl_lcd::{AooScreen, AooScreenBuilder, DISPLAY_SIZE};
 
 use ab_glyph::PxScale;
@@ -13,7 +14,6 @@ use image::imageops::FilterType;
 use image::{ImageReader, Rgb, RgbImage};
 use imageproc::drawing::{draw_line_segment_mut, draw_text_mut};
 use log::{error, info};
-use std::collections::HashMap;
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -129,11 +129,15 @@ fn run_demo(
             info!("Displaying demo panel...");
 
             // get sensor values from panel configuration
-            let mut demo_values = HashMap::new();
+            let mut demo_store = SensorStore::default();
+            let demo_source = demo_store.source_id("demo");
+            let now = Instant::now();
             for sensor in &panel.sensor {
-                demo_values.insert(
+                demo_store.insert(
                     sensor.label.clone(),
                     sensor.value.clone().unwrap_or_default(),
+                    demo_source,
+                    now,
                 );
             }
 
@@ -142,7 +146,7 @@ fn run_demo(
             renderer.set_save_processed_pic(save_images);
             renderer.set_save_progress_layer(save_images);
 
-            match renderer.render(panel, &demo_values) {
+            match renderer.render(panel, &demo_store) {
                 Ok(image) => screen.send_image(&image)?,
                 Err(e) => error!("Error rendering panel '{}': {e:?}", panel.friendly_name()),
             }

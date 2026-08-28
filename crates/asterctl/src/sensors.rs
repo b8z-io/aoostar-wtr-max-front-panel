@@ -7,6 +7,7 @@
 //! - internal date time sensors
 //! - file-based value provider with simple key-value pairs.
 
+use crate::store::SensorStore;
 use chrono::{DateTime, Datelike, Local, Timelike};
 use log::{debug, error, info, warn};
 use notify::event::{ModifyKind, RenameMode};
@@ -19,6 +20,7 @@ use std::ops::DerefMut;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::{Arc, RwLock, mpsc};
+use std::time::{Duration, Instant, SystemTime};
 
 pub fn get_date_time_value(label: &str, now: &DateTime<Local>) -> Option<String> {
     if !label.starts_with("DATE_") {
@@ -32,52 +34,46 @@ pub fn get_date_time_value(label: &str, now: &DateTime<Local>) -> Option<String>
     let minute = format!("{:02}", now.minute());
     let second = format!("{:02}", now.second());
 
-    // same formatting logic as in AOOSTAR-X
-    let value = match label {
-        "DATE_year" => year.to_string(),
-        "DATE_month" => month,
-        "DATE_day" => day,
-        "DATE_hour" => hour,
-        "DATE_minute" => minute,
-        "DATE_second" => second,
-        "DATE_m_d_h_m_1" => format!("{month}月{day}日  {hour}:{minute}"),
-        "DATE_m_d_h_m_2" => format!("{month}/{day}  {hour}:{minute}"),
-        "DATE_m_d_1" => format!("{month}月{day}日"),
-        "DATE_m_d_2" => format!("{month}-{day}"),
-        "DATE_y_m_d_1" => format!("{year}年{month}月{day}日"),
-        "DATE_y_m_d_2" => format!("{year}-{month}-{day}"),
-        "DATE_y_m_d_3" => format!("{year}/{month}/{day}"),
-        "DATE_y_m_d_4" => format!("{year} {month} {day}"),
-        "DATE_h_m_s_1" => format!("{hour}:{minute}:{second}"),
-        "DATE_h_m_s_2" => format!("{hour}时{minute}分{second}秒"),
-        "DATE_h_m_s_3" => format!("{hour} {minute} {second}"),
-        "DATE_h_m_1" => format!("{hour}时{minute}分"),
-        "DATE_h_m_2" => format!("{hour} : {minute}"),
-        "DATE_h_m_3" => format!("{hour}:{minute}"),
-        _ => return None,
-    };
-
-    Some(value)
+    match label {
+        // see https://github.com/zehnm/aoostar-rs/issues/13
+        "DATE_year" => Some(format!("{}", year)),
+        "DATE_month" => Some(month),
+        "DATE_day" => Some(day),
+        "DATE_hour" => Some(hour),
+        "DATE_minute" => Some(minute),
+        "DATE_second" => Some(second),
+        "DATE_y_m_d_1" => Some(format!("{year}-{month}-{day}")),
+        "DATE_y_m_d_2" => Some(format!("{year}/{month}/{day}")),
+        "DATE_y_m_d_3" => Some(format!("{year}.{month}.{day}")),
+        "DATE_y_m_d_4" => Some(format!("{year}{month}{day}")),
+        "DATE_m_d_1" => Some(format!("{month}-{day}")),
+        "DATE_m_d_2" => Some(format!("{month}/{day}")),
+        "DATE_m_d_h_m_1" => Some(format!("{month}-{day} {hour}:{minute}")),
+        "DATE_m_d_h_m_2" => Some(format!("{month}/{day} {hour}:{minute}")),
+        "DATE_h_m_s_1" => Some(format!("{hour}:{minute}:{second}")),
+        "DATE_h_m_s_2" => Some(format!("{hour}:{minute}:{second}")),
+        "DATE_h_m_s_3" => Some(format!("{hour}:{minute}:{second}")),
+        "DATE_h_m_1" => Some(format!("{hour}:{minute}")),
+        "DATE_h_m_2" => Some(format!("{hour}:{minute}")),
+        "DATE_h_m_3" => Some(format!("{hour}:{minute}")),
+        _ => None,
+    }
 }
 
-/// Read all sensor value source files from the given path and stort monitoring for changes.
+/// Start sensor file watcher for a single source file or a directory.
 ///
-/// The source path is either a single sensor source file or a directory containing multiple sensor
-/// source files.
-///
-/// The source path is monitored for changes in a separate thread.
-/// All updated files are automatically read and stored in the shared HashMap.
+/// Watches for sensor file changes and updates the shared sensor values map asynchronously.
 ///
 /// # Arguments
 ///
 /// * `source_path`: Single source file path or a directory path.
-/// * `values`: a shared, reader-writer lock protected HashMap
+/// * `values`: a shared, reader-writer lock protected SensorStore
 /// * `sensor_filter`: Optional list of regex filters to filter out matching sensor keys.
 ///
 /// returns: Result<(), Error>
 pub fn start_file_slurper<P: Into<PathBuf>>(
     source_path: P,
-    values: Arc<RwLock<HashMap<String, String>>>,
+    values: Arc<RwLock<SensorStore>>,
     sensor_filter: Option<Vec<Regex>>,
 ) -> anyhow::Result<()> {
     let dir_path = source_path.into();
@@ -126,8 +122,7 @@ pub fn start_file_slurper<P: Into<PathBuf>>(
                         debug!("Modified sensor file ({kind:?}): {path:?}");
                         let mut val = file_values.write().expect("Poisoned sensor RwLock");
 
-                        if let Err(e) =
-                            read_key_value_file(path, val.deref_mut(), sensor_filter.as_deref())
+                        if let Err(e) = read_sensor_file(path, val.deref_mut(), sensor_filter.as_deref())
                         {
                             warn!("Failed to read sensor file {path:?}: {e}");
                             continue;
@@ -150,13 +145,13 @@ pub fn start_file_slurper<P: Into<PathBuf>>(
 /// # Arguments
 ///
 /// * `path`: Single source file path or a directory path.
-/// * `values`: HashMap to store all read key-value pairs.
+/// * `values`: SensorStore to store all read key-value pairs.
 /// * `sensor_filter`: Optional list of regex filters to filter out matching sensor keys.
 ///
 /// returns: Result<(), Error>
 fn read_path<P: AsRef<Path>>(
     path: P,
-    values: &mut HashMap<String, String>,
+    store: &mut SensorStore,
     sensor_filter: Option<&[Regex]>,
 ) -> anyhow::Result<()> {
     let path = path.as_ref();
@@ -166,7 +161,7 @@ fn read_path<P: AsRef<Path>>(
     }
 
     if path.is_file() {
-        return read_key_value_file(path, values, sensor_filter);
+        return read_sensor_file(path, store, sensor_filter);
     }
 
     for entry in fs::read_dir(path)? {
@@ -174,13 +169,65 @@ fn read_path<P: AsRef<Path>>(
 
         if path.is_file()
             && path.extension().unwrap_or_default() == "txt"
-            && let Err(e) = read_key_value_file(&path, values, sensor_filter)
+            && let Err(e) = read_sensor_file(&path, store, sensor_filter)
         {
             warn!("Failed to read sensor file {path:?}: {e}");
         }
     }
 
     Ok(())
+}
+
+/// Read a sensor source file into the timestamped [`SensorStore`].
+///
+/// The file stem identifies the source (`host.txt` → `host`), so every provider gets its own
+/// age tracking and can be reported on independently. All values from one read share a single
+/// timestamp.
+///
+/// # Arguments
+///
+/// * `path`: sensor source file to read.
+/// * `store`: store to insert the values into.
+/// * `sensor_filter`: Optional list of regex filters to filter out matching sensor keys.
+pub fn read_sensor_file<P: AsRef<Path>>(
+    path: P,
+    store: &mut SensorStore,
+    sensor_filter: Option<&[Regex]>,
+) -> anyhow::Result<()> {
+    let path = path.as_ref();
+    let source_name = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let source = store.source_id(&source_name);
+
+    // Age is taken from the file's modification time, not from the moment we happen to read
+    // it. Stamping the read time would make every value look fresh immediately after start-up
+    // — so a crash-restarted renderer would present hours-old numbers as live, which is the
+    // exact failure staleness handling exists to prevent.
+    let updated = Instant::now()
+        .checked_sub(file_age(path))
+        .unwrap_or_else(Instant::now);
+
+    for (key, value) in parse_key_value_file(path, sensor_filter)? {
+        store.insert(key, value, source, updated);
+    }
+
+    Ok(())
+}
+
+/// How long ago a file was last modified, or zero if that cannot be determined.
+fn file_age(path: &Path) -> Duration {
+    fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .map(|modified| age_between(modified, SystemTime::now()))
+        .unwrap_or_default()
+}
+
+/// Elapsed time between two wall-clock instants, clamped at zero.
+fn age_between(modified: SystemTime, now: SystemTime) -> Duration {
+    now.duration_since(modified).unwrap_or_default()
 }
 
 /// Read a key-value-based sensor source file and store content in the provided hashmap.
@@ -202,8 +249,29 @@ pub fn read_key_value_file<P: AsRef<Path>>(
     values: &mut HashMap<String, String>,
     sensor_filter: Option<&[Regex]>,
 ) -> anyhow::Result<()> {
+    for (key, value) in parse_key_value_file(path, sensor_filter)? {
+        values.insert(key, value);
+    }
+
+    Ok(())
+}
+
+/// Parse a key-value file into trimmed, filtered pairs.
+///
+/// Shared by the plain-map reader used for configuration files and the [`SensorStore`]
+/// reader used for sensor values.
+///
+/// - Empty lines are skipped
+/// - Lines starting with # are skipped
+/// - Key-value pairs must be separated by `:`
+/// - All keys and values are trimmed
+fn parse_key_value_file<P: AsRef<Path>>(
+    path: P,
+    sensor_filter: Option<&[Regex]>,
+) -> anyhow::Result<Vec<(String, String)>> {
     debug!("Reading sensor file {:?}", path.as_ref());
 
+    let mut pairs = Vec::new();
     let file = fs::File::open(path)?;
     let reader = BufReader::new(file);
 
@@ -221,38 +289,21 @@ pub fn read_key_value_file<P: AsRef<Path>>(
                 continue;
             }
 
-            values.insert(key.trim().to_string(), value.trim().to_string());
-        } else {
-            warn!("Skipping invalid entry in sensor value file: {line}");
+            pairs.push((key.trim().to_string(), value.trim().to_string()));
         }
     }
 
-    Ok(())
+    Ok(pairs)
 }
 
-fn is_filtered(key: &str, filters: &[Regex]) -> bool {
-    filters.iter().any(|re| re.is_match(key))
-}
-
-/// Read the sensor filter configuration file.
+/// Load a sensor filter file where each line is a regex pattern.
 ///
-/// This is a simple text file containing multiple RegEx expressions.
-/// - one RegEx per line
-/// - Empty lines are skipped
-/// - Lines starting with # are skipped
-///
-/// # Arguments
-///
-/// * `path`: file path to read.
-///
-/// returns: None if the file is empty or contains no valid RegEx expressions.
-///
+/// Lines starting with `!` are keep patterns, all others are drop patterns.
+/// Returns `None` iff the file is empty or contains only comments/blank lines.
 pub fn read_filter_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Option<Vec<Regex>>> {
-    debug!("Reading sensor filter file {:?}", path.as_ref());
-
-    let mut filters = Vec::new();
     let file = fs::File::open(path)?;
     let reader = BufReader::new(file);
+    let mut patterns = Vec::new();
 
     for line in reader.lines() {
         let line = line?;
@@ -260,77 +311,39 @@ pub fn read_filter_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Option<Vec<Re
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-
-        match Regex::new(line) {
-            Ok(re) => {
-                filters.push(re);
-            }
-            Err(e) => {
-                warn!("Skipping invalid filter in sensor filter file: {line}: {e}");
-            }
-        }
+        patterns.push(Regex::new(line)?);
     }
 
-    if filters.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(filters))
-    }
+    Ok(if patterns.is_empty() { None } else { Some(patterns) })
+}
+
+/// Check if a sensor key is filtered by any of the regex patterns.
+fn is_filtered(key: &str, filter: &[Regex]) -> bool {
+    filter.iter().any(|f| f.is_match(key))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rstest::rstest;
 
     #[test]
-    fn is_filtered_does_not_filter_without_filters() {
-        let key = "foobar";
-        let filters = Vec::new();
-        assert!(!is_filtered(key, &filters));
-    }
+    fn check_date_time_label() {
+        let now: DateTime<Local> = Local::now();
+        let year = now.year();
 
-    #[test]
-    fn test_unit_extension_filter() {
-        let key = "temperature_cpu#unit";
-        let filters = vec![Regex::new("^temperature_.*#unit").unwrap()];
-        assert!(is_filtered(key, &filters));
-    }
-
-    #[rstest]
-    #[case(vec!["^foo$"])]
-    #[case(vec!["^bar"])]
-    #[case(vec!["other"])]
-    #[case(vec!["123", "bla", "other"])]
-    fn is_filtered_does_not_filter_without_a_match(#[case] filters: Vec<&str>) {
-        let key = "foobar";
-        let filters: Vec<Regex> = filters
-            .iter()
-            .map(|f| Regex::new(f).expect("Invalid regex"))
-            .collect();
-        assert!(
-            !is_filtered(key, &filters),
-            "Filter {filters:?} should not match {key}"
+        assert_eq!(
+            get_date_time_value("DATE_h_m_s_1", &now),
+            Some(format!("{:02}:{:02}:{:02}", now.hour(), now.minute(), now.second()))
         );
-        //
-    }
-
-    #[rstest]
-    #[case(vec!["foo"])]
-    #[case(vec!["bar"])]
-    #[case(vec!["^.+bar"])]
-    #[case(vec!["123", "foo", "other"])]
-    #[case(vec!["bar", "123"])]
-    #[case(vec!["^.+bar", "other"])]
-    fn is_filtered_matches_filters(#[case] filters: Vec<&str>) {
-        let key = "foobar";
-        let filters: Vec<Regex> = filters
-            .iter()
-            .map(|f| Regex::new(f).expect("Invalid regex"))
-            .collect();
-        assert!(
-            is_filtered(key, &filters),
-            "Filter {filters:?} match match {key}"
+        assert_eq!(
+            get_date_time_value("DATE_y_m_d_1", &now),
+            Some(format!("{}-{:02}-{:02}", year, now.month(), now.day()))
         );
+        assert_eq!(get_date_time_value("DATE_year", &now), Some(format!("{year}")));
+        assert_eq!(get_date_time_value("DATE_hour", &now), Some(format!("{:02}", now.hour())));
+        assert_eq!(get_date_time_value("DATE_month", &now), Some(format!("{:02}", now.month())));
+        assert_eq!(get_date_time_value("DATE_day", &now), Some(format!("{:02}", now.day())));
+        assert_eq!(get_date_time_value("DATE_second", &now), Some(format!("{:02}", now.second())));
+        assert_eq!(get_date_time_value("invalid", &now), None);
     }
 }

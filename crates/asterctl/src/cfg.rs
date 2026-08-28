@@ -400,6 +400,19 @@ pub struct Sensor {
     /// Pivot y
     #[serde(rename = "xz_y")]
     pub xz_y: Option<i32>,
+
+    /// Placeholder text rendered when this sensor has no current value.
+    ///
+    /// Fork addition, not part of the AOOSTAR-X configuration format. Optional and defaulted,
+    /// so vendor configuration files parse unchanged.
+    #[serde(default)]
+    pub stale_text: Option<String>,
+    /// Colour used when rendering a stale placeholder.
+    ///
+    /// Fork addition, not part of the AOOSTAR-X configuration format. Keep it distinct from
+    /// any value-driven colour so "no reading" cannot be confused with "critical".
+    #[serde(default)]
+    pub stale_color: Option<FontColor>,
     /*
     // The following fields of the AOOSTAR-X json configuration file are NOT used in `asterctl`
     /// _Not (yet) used_
@@ -620,4 +633,32 @@ where
 {
     let rounded = f32::deserialize(deserializer).map(f32::round)?;
     Ok(rounded as i32)
+}
+
+/// Default placeholder text for a sensor with no current value.
+pub const DEFAULT_STALE_TEXT: &str = "--";
+
+/// Default stale colour: mid-grey.
+pub const DEFAULT_STALE_COLOR: Rgb<u8> = Rgb([128, 128, 128]);
+
+impl Sensor {
+    /// The value to render when this sensor has no current reading.
+    ///
+    /// Text sensors get a placeholder string. Graphical modes fall back to their minimum
+    /// value — an empty bar or a needle at rest — so the visual says "no data" rather than
+    /// "genuinely low".
+    pub fn stale_value(&self) -> String {
+        match self.mode {
+            SensorMode::Text => self
+                .stale_text
+                .clone()
+                .unwrap_or_else(|| DEFAULT_STALE_TEXT.to_string()),
+            _ => self.min_value.unwrap_or_default().to_string(),
+        }
+    }
+
+    pub fn stale_color(&self) -> FontColor {
+        self.stale_color
+            .unwrap_or(FontColor::from(DEFAULT_STALE_COLOR))
+    }
 }
